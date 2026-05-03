@@ -15,3 +15,7 @@ app/build/
 .externalNativeBuild
 .cxx
 local.properties
+app/google-services.json
+*.png
+!app/src/main/res/**/*.png
+!app/src/main/res/**/**/*.png

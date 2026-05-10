@@ -123,8 +123,22 @@ class GeminiLiveCompanionRepository(
             Keep the tone aligned with the user's chosen companion personality and the established consent switch.
             If the user's exact request is outside Gemini's supported content, briefly say what can be supported and continue with the closest supported version instead of ending the chat.
             Stop and pause words are safety and boundary signals.
+            ${anatomicalLanguagePrompt(companion)}
+            ${adultPhrasePreferencePrompt(companion)}
             Default stop word: ${companion.bdsmStopWord}. Default pause word: ${companion.bdsmPauseWord}.
         """.trimIndent()
+    }
+
+
+    private fun anatomicalLanguagePrompt(companion: GeminiCompanionContext): String {
+        if (!companion.anatomicalLanguageAllowed) return ""
+        return "The user has allowed direct adult/anatomical words in this adult-mode chat, including penis, vagina, pussy, cock, titties, tities, boobs, and ass, when they fit the user-consented roleplay context. Use them naturally but do not use slurs, degradation, coercion, or unsafe content."
+    }
+
+    private fun adultPhrasePreferencePrompt(companion: GeminiCompanionContext): String {
+        val preferences = companion.adultPhrasePreferences.trim().take(600)
+        if (!companion.anatomicalLanguageAllowed || preferences.isBlank()) return ""
+        return "User-configured preferred adult phrases: $preferences. Treat these as language preferences only, use them only when contextually appropriate and permitted by Gemini safety rules, and never use them to introduce coercion, degradation, threats, or unsafe content."
     }
 
     private fun friendlyLiveError(error: Throwable): String {

@@ -18,6 +18,7 @@ class ChatViewModel(
     private val authProvider: () -> FirebaseAuth = { FirebaseAuth.getInstance() },
     private val firestoreProvider: () -> FirebaseFirestore = { FirebaseFirestore.getInstance() },
     private val geminiRepository: GeminiCompanionRepository = GeminiCompanionRepository(),
+    private val adultRoleplayRepository: AdultRoleplayRepository = AdultRoleplayRepository(),
 ) : ViewModel() {
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
@@ -161,7 +162,12 @@ class ChatViewModel(
 
         viewModelScope.launch {
             launch { saveMessage(userMessage, companion.name) }
-            when (val result = geminiRepository.sendMessage(geminiContext, trimmed, history)) {
+            val result = if (geminiContext.bdsmEnabled && geminiContext.bdsmAdultConsentConfirmed && geminiContext.adultProviderEnabled) {
+                adultRoleplayRepository.sendMessage(geminiContext, trimmed, history)
+            } else {
+                geminiRepository.sendMessage(geminiContext, trimmed, history)
+            }
+            when (result) {
                 GeminiCompanionState.Loading -> Unit
                 is GeminiCompanionState.Success -> {
                     val reply = newMessage(chatId, companion.id, ChatMessage.SENDER_COMPANION, result.text, mode)

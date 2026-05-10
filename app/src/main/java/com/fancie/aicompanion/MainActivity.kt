@@ -1,6 +1,7 @@
 package com.fancie.aicompanion
 
 import android.Manifest
+import android.app.Activity
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.content.Context
@@ -15,6 +16,8 @@ import android.os.Bundle
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioAttributes
+import android.provider.MediaStore
+import android.speech.RecognizerIntent
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
@@ -289,7 +292,7 @@ private enum class AppRoute(val title: String, val subtitle: String) {
     Preferences("Settings", "Manage your companion, privacy, storage, and support settings."),
     ProfileInfo("Profile Info", "Manage your profile photo and personal details."),
     AccountSettings("Account Settings", "Manage sign-in, account access, and sign out."),
-    VoiceLiveSettings("Voice & Live Settings", "Choose voice, microphone, speaker, and live avatar options."),
+    VoiceLiveSettings("Voice & Live Settings", "Choose voice, microphone, speaker, and video chat options."),
     JournalStorageSettings("Journal Storage", "Choose where entries are saved."),
     PrivacySettings("Privacy Settings", "Control app lock, sync, previews, and data export."),
     NotificationSettings("Notifications", "Choose reminders, check-ins, and gentle prompts."),
@@ -322,7 +325,6 @@ private enum class JournalEntryType(val label: String) {
 private enum class LiveMode {
     TEXT,
     VOICE,
-    LIVE_AVATAR,
     VIDEO_STYLE,
 }
 
@@ -345,6 +347,11 @@ data class BdsmIdentitySettings(
     val adultConsentConfirmed: Boolean = false,
     val defaultStopWord: String = "Red",
     val defaultPauseWord: String = "Yellow",
+    val anatomicalLanguageAllowed: Boolean = true,
+    val preferredAdultPhrases: String = "",
+    val adultProviderEnabled: Boolean = false,
+    val adultProviderEndpoint: String = "",
+    val adultProviderModel: String = "llama-3.1-8b-instruct",
 )
 
 private data class BdsmSessionState(
@@ -422,7 +429,8 @@ private data class ChatPreview(
     val unreadCount: Int = 0,
     val photoUri: String? = null,
     val imageResId: Int? = null,
-)
+)
+
 private data class ChatSummaryPreview(
     val companionId: String,
     val lastMessage: String,
@@ -647,6 +655,11 @@ private fun CompanionProfile.toJson(): JSONObject = JSONObject()
         .put("adultConsentConfirmed", bdsmIdentitySettings.adultConsentConfirmed)
         .put("defaultStopWord", bdsmIdentitySettings.defaultStopWord)
         .put("defaultPauseWord", bdsmIdentitySettings.defaultPauseWord)
+        .put("anatomicalLanguageAllowed", bdsmIdentitySettings.anatomicalLanguageAllowed)
+        .put("preferredAdultPhrases", bdsmIdentitySettings.preferredAdultPhrases)
+        .put("adultProviderEnabled", bdsmIdentitySettings.adultProviderEnabled)
+        .put("adultProviderEndpoint", bdsmIdentitySettings.adultProviderEndpoint)
+        .put("adultProviderModel", bdsmIdentitySettings.adultProviderModel)
     )
 
 private fun JSONArray.toCompanionList(): List<CompanionProfile> {
@@ -687,6 +700,11 @@ private fun JSONObject.toCompanionProfile(): CompanionProfile {
             adultConsentConfirmed = bdsm?.optBoolean("adultConsentConfirmed", false) ?: false,
             defaultStopWord = bdsm?.optString("defaultStopWord", "Red") ?: "Red",
             defaultPauseWord = bdsm?.optString("defaultPauseWord", "Yellow") ?: "Yellow",
+            anatomicalLanguageAllowed = bdsm?.optBoolean("anatomicalLanguageAllowed", true) ?: true,
+            preferredAdultPhrases = bdsm?.optString("preferredAdultPhrases", "") ?: "",
+            adultProviderEnabled = bdsm?.optBoolean("adultProviderEnabled", false) ?: false,
+            adultProviderEndpoint = bdsm?.optString("adultProviderEndpoint", "") ?: "",
+            adultProviderModel = bdsm?.optString("adultProviderModel", "llama-3.1-8b-instruct") ?: "llama-3.1-8b-instruct",
         ),
     )
 }
@@ -1105,7 +1123,7 @@ private fun FancieApp() {
                     companion = activeCompanion,
                     onText = { navigateTo(AppRoute.TextChat) },
                     onCall = { navigateTo(AppRoute.LiveCompanionCall) },
-                    onVideo = { navigateTo(AppRoute.LiveCompanion) },
+                    onVideo = { navigateTo(AppRoute.LiveCompanionCall) },
                 )
                 AppRoute.TextChat -> CompanionChatScreen(
                     companion = activeCompanion,
@@ -1198,6 +1216,8 @@ private fun FancieApp() {
                     onSelected = { option ->
                         val target = companionBuilderDraft ?: activeCompanion
                         val changed = target.copy(
+                            gender = "Female",
+                            voice = voiceForGender("Female", target.voice),
                             avatarType = option.name,
                             imageResName = option.resName,
                             imageResId = option.resId,
@@ -1215,6 +1235,8 @@ private fun FancieApp() {
                     onSelected = { option ->
                         val target = companionBuilderDraft ?: activeCompanion
                         val changed = target.copy(
+                            gender = "Male",
+                            voice = voiceForGender("Male", target.voice),
                             avatarType = option.name,
                             imageResName = option.resName,
                             imageResId = option.resId,
@@ -1607,7 +1629,7 @@ private fun PremiumTopBar(
                                         "Voice Settings" -> onNavigate(AppRoute.VoiceLiveSettings)
                                         "Privacy Settings" -> onNavigate(AppRoute.PrivacySettings)
                                         "View Disclaimer" -> onNavigate(AppRoute.Disclaimer)
-                                        "Video", "Video Chat" -> onNavigate(AppRoute.LiveCompanion)
+                                        "Video", "Video Chat" -> onNavigate(AppRoute.LiveCompanionCall)
                                         "Phone" -> onNavigate(AppRoute.LiveCompanionCall)
                                         "Clear Chat" -> scope.launch { clearCloudChatMessages(companion.id) }
                                         "Save Chat to Journal" -> onNavigate(AppRoute.Journal)
@@ -1639,7 +1661,7 @@ private fun overflowItems(route: AppRoute): List<String> {
     return when (route) {
         AppRoute.Home -> listOf("Change Companion", "Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.Chat -> listOf("Open Settings", "View Disclaimer", "Sign Out")
-        AppRoute.TextChat -> listOf("Video Chat", "Phone", "Change Companion", "Voice Settings", "Clear Chat", "Save Chat to Journal")
+        AppRoute.TextChat -> listOf("Video Chat", "Phone", "Change Companion", "Open Settings", "Clear Chat", "Save Chat to Journal")
         AppRoute.LiveCompanionCall -> listOf("Change Companion", "Voice Settings", "Companion Appearance", "Save Call Notes to Journal", "Turn Captions On/Off", "Privacy Settings", "End Session")
         AppRoute.Journal -> listOf("Storage Location", "Save on Device", "Save to Cloud", "Save to Both", "View Journal Entries", "Export Journal", "Clear Draft", "Privacy Settings")
         AppRoute.Fitness -> listOf("Progress Tracker", "Open Wellness")
@@ -1742,6 +1764,33 @@ private fun voiceOptionsFor(gender: String) = when (gender) {
     "Female" -> femaleVoiceOptions()
     "Male" -> maleVoiceOptions()
     else -> femaleVoiceOptions() + maleVoiceOptions() + neutralVoiceOptions()
+}
+
+private fun voiceForGender(gender: String, currentVoice: String): String {
+    val allowed = voiceOptionsFor(gender)
+    return currentVoice.takeIf { it in allowed } ?: allowed.firstOrNull() ?: currentVoice
+}
+
+private fun wakeAssistantIdFor(companion: CompanionProfile): String {
+    return if (companion.id == "kai") "kai" else "luna"
+}
+
+private fun wakeAssistantName(id: String): String = if (id == "kai") "Kai" else "Luna"
+
+private fun wakePhraseFor(id: String): String = "Hey ${wakeAssistantName(id)}"
+
+private fun normalizeWakePhrase(text: String): String {
+    return text
+        .lowercase()
+        .filter { it.isLetterOrDigit() || it.isWhitespace() }
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}
+
+private fun spokenWakePhraseMatches(spokenText: String, targetPhrase: String): Boolean {
+    val spoken = normalizeWakePhrase(spokenText)
+    val target = normalizeWakePhrase(targetPhrase)
+    return spoken == target || spoken.contains(target)
 }
 
 private fun calculateCompanionExperience(
@@ -2403,6 +2452,11 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             bdsmAdultConsentConfirmed = companion.bdsmIdentitySettings.adultConsentConfirmed,
             bdsmStopWord = companion.bdsmIdentitySettings.defaultStopWord,
             bdsmPauseWord = companion.bdsmIdentitySettings.defaultPauseWord,
+            anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
+            adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
+            adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
+            adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
+            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2429,7 +2483,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 SecondarySoftButton("See Companion Live", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.LiveCompanionCall) })
-                SecondarySoftButton("Voice Settings", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.VoiceLiveSettings) })
+                SecondarySoftButton("Settings", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.Preferences) })
             }
             Column(
                 modifier = Modifier
@@ -2553,6 +2607,11 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             bdsmAdultConsentConfirmed = companion.bdsmIdentitySettings.adultConsentConfirmed,
             bdsmStopWord = companion.bdsmIdentitySettings.defaultStopWord,
             bdsmPauseWord = companion.bdsmIdentitySettings.defaultPauseWord,
+            anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
+            adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
+            adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
+            adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
+            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel,
         )
     }
     var liveSessionState by remember { mutableStateOf<GeminiLiveSessionState>(GeminiLiveSessionState.Idle) }
@@ -2562,7 +2621,6 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     fun startGeminiLive(mode: LiveMode) {
         val modeLabel = when (mode) {
             LiveMode.VIDEO_STYLE -> "video chat with the companion's visual avatar"
-            LiveMode.LIVE_AVATAR -> "live companion avatar voice call"
             LiveMode.VOICE -> "voice call"
             LiveMode.TEXT -> "text chat"
         }
@@ -2732,10 +2790,6 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                         showTextChat = true
                     }
                     ModeChip("Voice Chat", state.selectedMode == LiveMode.VOICE) { requestOrStartGeminiLive(LiveMode.VOICE) }
-                    ModeChip("Live Avatar", state.selectedMode == LiveMode.LIVE_AVATAR) {
-                        requestOrStartGeminiLive(LiveMode.LIVE_AVATAR)
-                        state = state.copy(isCompanionSpeaking = true, currentCaption = "I'm here with you in live avatar mode.")
-                    }
                     ModeChip("Video Chat", state.selectedMode == LiveMode.VIDEO_STYLE) { requestOrStartGeminiLive(LiveMode.VIDEO_STYLE) }
                 }
 
@@ -2861,7 +2915,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                                         val userText = textInput.trim()
                                         val mode = when (state.selectedMode) {
                                             LiveMode.VIDEO_STYLE -> ChatMessage.MODE_VIDEO
-                                            LiveMode.VOICE, LiveMode.LIVE_AVATAR -> ChatMessage.MODE_CALL
+                                            LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
                                         val history = chatMessages.map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
@@ -3199,10 +3253,7 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                 QuickActionCard("Text Chat", "Continue the conversation by typing.", "chat", RosePink, Modifier.weight(1f)) { onNavigate(AppRoute.TextChat) }
                 QuickActionCard("Voice Chat", "Microphone-ready companion mode.", "voice", CalmBlue, Modifier.weight(1f)) { onNavigate(AppRoute.LiveCompanionCall) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                QuickActionCard("Video Chat", "See your companion's face while talking.", "video", AccentPurple, Modifier.weight(1f)) { onNavigate(AppRoute.LiveCompanionCall) }
-                QuickActionCard("Live Avatar", "Companion face with soft motion.", "avatar", GoldAccent, Modifier.weight(1f)) { onNavigate(AppRoute.LiveCompanionCall) }
-            }
+            QuickActionCard("Video Chat", "See your companion's face while talking.", "video", AccentPurple, Modifier.fillMaxWidth()) { onNavigate(AppRoute.LiveCompanionCall) }
             GlassCard {
                 Text("Video Chat is companion-facing.", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text("This version shows the selected companion photo/avatar with live voice status. Full photo-to-talking-avatar lip sync requires a dedicated avatar animation service later.", color = TextMuted, lineHeight = 21.sp)
@@ -3347,7 +3398,7 @@ private fun PersonalityBuilderScreen(
         "Motivational" to "Pushes me with love",
         "Soothing" to "Slow, calming, and tender",
     )
-    val supportOptions = listOf("Stress", "Self-worth", "Confidence", "Grounding", "Journaling", "Reflection", "Relationships", "Creativity")
+    val supportOptions = listOf("Stress", "Self-worth", "Confidence", "Grounding", "Journaling", "Reflection", "Relationships", "Creativity", "Fitness")
     val roleplayStyles = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "BDSM")
     val characterModes = listOf(
         "Best Friend" to "Supportive, loyal, honest, and emotionally present.",
@@ -3420,12 +3471,7 @@ private fun PersonalityBuilderScreen(
                     RoundedInputField(companion.name, { onCompanionChange(companion.copy(name = it)) }, "Companion name")
                 }
                 SoftDropdown("Gender", companion.gender, genderOptions) { gender ->
-                    val defaultVoice = when (gender) {
-                        "Male" -> if (companion.voice in femaleVoiceOptions) "Calm Male" else companion.voice
-                        "Female" -> if (companion.voice in maleVoiceOptions) "Soft Female" else companion.voice
-                        else -> companion.voice
-                    }
-                    onCompanionChange(companion.copy(gender = gender, voice = defaultVoice))
+                    onCompanionChange(companion.copy(gender = gender, voice = voiceForGender(gender, companion.voice)))
                 }
                 RoundedInputField(companion.shortDescription, { onCompanionChange(companion.copy(shortDescription = it)) }, "Short description", minLines = 2)
             }
@@ -3506,6 +3552,31 @@ private fun PersonalityBuilderScreen(
                                 enabled = confirmed && "BDSM" in selectedRoleplayStyles,
                                 adultConsentConfirmed = confirmed,
                             ),
+                        ))
+                    },
+                    onAnatomicalLanguageAllowedChange = { allowed ->
+                        onCompanionChange(companion.copy(
+                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(anatomicalLanguageAllowed = allowed),
+                        ))
+                    },
+                    onPreferredAdultPhrasesChange = { phrases ->
+                        onCompanionChange(companion.copy(
+                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(preferredAdultPhrases = phrases),
+                        ))
+                    },
+                    onAdultProviderEnabledChange = { enabled ->
+                        onCompanionChange(companion.copy(
+                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderEnabled = enabled),
+                        ))
+                    },
+                    onAdultProviderEndpointChange = { endpoint ->
+                        onCompanionChange(companion.copy(
+                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderEndpoint = endpoint),
+                        ))
+                    },
+                    onAdultProviderModelChange = { model ->
+                        onCompanionChange(companion.copy(
+                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderModel = model),
                         ))
                     },
                 )
@@ -3872,6 +3943,11 @@ private fun RoleplayDetails(
     onBoundariesChange: (String) -> Unit,
     bdsmIdentitySettings: BdsmIdentitySettings,
     onBdsmConsentChange: (Boolean) -> Unit,
+    onAnatomicalLanguageAllowedChange: (Boolean) -> Unit,
+    onPreferredAdultPhrasesChange: (String) -> Unit,
+    onAdultProviderEnabledChange: (Boolean) -> Unit,
+    onAdultProviderEndpointChange: (String) -> Unit,
+    onAdultProviderModelChange: (String) -> Unit,
 ) {
     var detailOptions by remember(style) { mutableStateOf(setOf<String>()) }
     when {
@@ -3898,6 +3974,31 @@ private fun RoleplayDetails(
                 Text("This companion can support adult consent-based fantasy roleplay through chat. Boundaries, roles, and safewords will be established before roleplay begins.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
             ToggleRow("I understand this mode is for consenting adults only.", bdsmIdentitySettings.adultConsentConfirmed, onBdsmConsentChange)
+                        ToggleRow("Allow anatomical words", bdsmIdentitySettings.anatomicalLanguageAllowed, onAnatomicalLanguageAllowedChange)
+            Text("Allows adult language preferences only when this adult mode is selected and consent is confirmed.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+            RoundedInputField(
+                value = bdsmIdentitySettings.preferredAdultPhrases,
+                onValueChange = onPreferredAdultPhrasesChange,
+                label = "Preferred adult phrases",
+                minLines = 3,
+            )
+            Text("Saved privately with this companion and sent only when adult language preferences are enabled.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+            HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
+            ToggleRow("Use self-hosted adult provider", bdsmIdentitySettings.adultProviderEnabled, onAdultProviderEnabledChange)
+            Text("Routes adult-mode messages to your own OpenAI-compatible Llama or DeepSeek endpoint after the local safety filter passes.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+            RoundedInputField(
+                value = bdsmIdentitySettings.adultProviderEndpoint,
+                onValueChange = onAdultProviderEndpointChange,
+                label = "Self-hosted adult provider URL",
+                minLines = 1,
+            )
+            RoundedInputField(
+                value = bdsmIdentitySettings.adultProviderModel,
+                onValueChange = onAdultProviderModelChange,
+                label = "Model name",
+                minLines = 1,
+            )
+            MiniStateCard("Safety filter", "Blocks minors, non-consent, illegal content, and real harm before provider calls")
             MiniStateCard("Default stop word", bdsmIdentitySettings.defaultStopWord)
             MiniStateCard("Default pause word", bdsmIdentitySettings.defaultPauseWord)
         }
@@ -4208,6 +4309,52 @@ private fun FitnessScreen(
     )
     val activeWorkout = workouts.firstOrNull { it.title == activeWorkoutTitle } ?: workouts.first()
     val progress = (minutesToday / goalMinutes.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val context = LocalContext.current
+    var trainerVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var trainerVideoStatus by rememberSaveable { mutableStateOf("No trainer video recorded yet.") }
+    val trainerVideoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.data
+            trainerVideoUri = uri?.toString()
+            trainerVideoStatus = if (uri != null) {
+                "Trainer video recorded and ready."
+            } else {
+                "Video recorded. Camera app did not return a shareable URI."
+            }
+        } else {
+            trainerVideoStatus = "Recording canceled."
+        }
+    }
+
+    fun recordTrainerVideo() {
+        val intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_DURATION_LIMIT, 90)
+            putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            trainerVideoStatus = "No camera app is available for recording."
+        } else {
+            trainerVideoLauncher.launch(intent)
+        }
+    }
+
+    fun shareTrainerProgress() {
+        val uri = trainerVideoUri?.let { Uri.parse(it) }
+        val shareIntent = if (uri != null) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = "video/*"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, "LUNAKAI fitness progress: ${activeWorkout.title}")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } else {
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, "LUNAKAI fitness progress: ${activeWorkout.title} - ${formatDuration(totalSeconds)} total movement.")
+            }
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "Share fitness progress"))
+    }
 
     GradientBackground {
         ScreenScroll {
@@ -4239,6 +4386,23 @@ private fun FitnessScreen(
                 MiniStateCard("Last completed", lastWorkoutTitle)
                 MiniStateCard("Total timed movement", formatDuration(totalSeconds))
                 Text("This tracker is for general wellness and motivation, not medical advice.", color = TextMuted, fontSize = 12.sp)
+            }
+
+            GlassCard {
+                Text("AI trainer check-in", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Record a set, walk-through, or progress clip so a trainer mode can review form notes later and you can share progress.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                MiniStateCard("Video sample", trainerVideoStatus)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    SecondarySoftButton("Record Video", modifier = Modifier.weight(1f), onClick = { recordTrainerVideo() })
+                    SecondarySoftButton("Share Progress", modifier = Modifier.weight(1f), onClick = { shareTrainerProgress() })
+                }
+                SecondarySoftButton("Attach to Trainer Review", onClick = {
+                    trainerVideoStatus = if (trainerVideoUri != null) {
+                        "Video attached for the next trainer review."
+                    } else {
+                        "Record a video before attaching it to trainer review."
+                    }
+                })
             }
 
             SectionHeader("Free workouts", "No equipment needed. Choose what fits your energy.")
@@ -4465,8 +4629,17 @@ private fun PreferencesScreen(
     var companionNotificationsEnabled by remember { mutableStateOf(context.prefBoolean("settings_companion_notifications_enabled", true)) }
     var notificationStyle by remember { mutableStateOf(context.prefString("settings_notification_style", "Calculated from character preferences")) }
     var notificationUrgency by remember { mutableStateOf(context.prefString("settings_notification_urgency", "Calculated from character preferences")) }
-    var wakePhraseEnabled by remember { mutableStateOf(context.prefBoolean("settings_wake_phrase_enabled", false)) }
-    var wakeAudioSource by remember { mutableStateOf(context.prefString("settings_wake_audio_source", "Phone microphone only when selected")) }
+    var wakeAssistantId by remember {
+        mutableStateOf(
+            context.prefString("voice_wake_assistant_id", wakeAssistantIdFor(companion))
+                .takeIf { it == "luna" || it == "kai" }
+                ?: wakeAssistantIdFor(companion),
+        )
+    }
+    fun wakeSettingKey(name: String) = "voice_wake_${wakeAssistantId}_$name"
+    val wakePhrase = wakePhraseFor(wakeAssistantId)
+    var wakePhraseEnabled by remember(wakeAssistantId) { mutableStateOf(context.prefBoolean(wakeSettingKey("wakePhraseEnabled"), false)) }
+    var wakeAudioSource by remember(wakeAssistantId) { mutableStateOf(context.prefString(wakeSettingKey("audioSource"), "Phone microphone only when selected")) }
     val accountEmail = currentFirebaseEmail() ?: "Not available"
     val wakeAudioOptions = remember(context) { availableAudioInputSources(context) }
     var openSettingsSection by remember { mutableStateOf<String?>(null) }
@@ -4496,6 +4669,7 @@ private fun PreferencesScreen(
         companionNotificationsEnabled,
         notificationStyle,
         notificationUrgency,
+        wakeAssistantId,
         wakePhraseEnabled,
         wakeAudioSource,
     ) {
@@ -4516,8 +4690,9 @@ private fun PreferencesScreen(
         context.savePref("settings_companion_notifications_enabled", companionNotificationsEnabled)
         context.savePref("settings_notification_style", notificationStyle)
         context.savePref("settings_notification_urgency", notificationUrgency)
-        context.savePref("settings_wake_phrase_enabled", wakePhraseEnabled)
-        context.savePref("settings_wake_audio_source", wakeAudioSource)
+        context.savePref("voice_wake_assistant_id", wakeAssistantId)
+        context.savePref(wakeSettingKey("wakePhraseEnabled"), wakePhraseEnabled)
+        context.savePref(wakeSettingKey("audioSource"), wakeAudioSource)
     }
 
     GradientBackground {
@@ -4555,7 +4730,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Companion Customization",
-                subtitle = "${companion.gender} · ${companion.communicationStyle} · ${companion.avatarType}",
+                subtitle = "${companion.gender} Â· ${companion.communicationStyle} Â· ${companion.avatarType}",
                 expanded = openSettingsSection == "Companion Customization",
                 onToggle = { toggleSection("Companion Customization") },
             ) {
@@ -4608,7 +4783,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Wellness Settings",
-                subtitle = "$defaultWellnessTool · reminders $reminderFrequency",
+                subtitle = "$defaultWellnessTool Â· reminders $reminderFrequency",
                 expanded = openSettingsSection == "Wellness Settings",
                 onToggle = { toggleSection("Wellness Settings") },
             ) {
@@ -4671,7 +4846,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Companion Notifications",
-                subtitle = "$notificationStyle · $notificationUrgency",
+                subtitle = "$notificationStyle Â· $notificationUrgency",
                 expanded = openSettingsSection == "Companion Notifications",
                 onToggle = { toggleSection("Companion Notifications") },
             ) {
@@ -4694,19 +4869,25 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Voice Wake Phrase",
-                subtitle = "Hey ${companion.name} · $wakeAudioSource",
+                subtitle = "$wakePhrase - $wakeAudioSource",
                 expanded = openSettingsSection == "Voice Wake Phrase",
                 onToggle = { toggleSection("Voice Wake Phrase") },
             ) {
-                ToggleRow("Enable Hey ${companion.name}", wakePhraseEnabled) { wakePhraseEnabled = it }
-                MiniStateCard("Wake phrase", "Hey ${companion.name}")
+                SoftDropdown(
+                    label = "Wake assistant",
+                    selected = wakeAssistantName(wakeAssistantId),
+                    options = listOf("Luna", "Kai"),
+                    onSelected = { selected -> wakeAssistantId = selected.lowercase() },
+                )
+                ToggleRow("Enable $wakePhrase", wakePhraseEnabled) { wakePhraseEnabled = it }
+                MiniStateCard("Wake phrase", wakePhrase)
                 SoftDropdown(
                     label = "Audio input source",
                     selected = wakeAudioSource,
                     options = wakeAudioOptions,
                     onSelected = { wakeAudioSource = it },
                 )
-                Text("Wake phrase and audio routing are saved here. Only audio inputs currently visible to Android appear in this list.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Only Luna and Kai can own wake phrases and Bluetooth wake routing. Custom companions keep their chat voice but do not register a wake phrase.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 SecondarySoftButton("Voice Controls", onClick = { onNavigate(AppRoute.VoiceLiveSettings) })
             }
 
@@ -5045,20 +5226,66 @@ private fun VoiceLiveSettingsScreen(
     var microphone by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("microphone"), true)) }
     var speaker by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("speaker"), true)) }
     var voiceSpeed by remember(companion.id) { mutableStateOf(context.prefString(settingKey("voiceSpeed"), "Normal")) }
-    var wakePhraseEnabled by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("wakePhraseEnabled"), false)) }
     var answerStyle by remember(companion.id) { mutableStateOf(context.prefString(settingKey("answerStyle"), "Answer with voice and text")) }
-    var audioSource by remember(companion.id) { mutableStateOf(context.prefString(settingKey("audioSource"), "Phone microphone only when selected")) }
-    var bluetoothAccess by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("bluetoothAccess"), false)) }
-    var voiceTrainingEnabled by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("voiceTrainingEnabled"), false)) }
-    var trainingStatus by remember(companion.id) { mutableStateOf(context.prefString(settingKey("trainingStatus"), "Not trained yet")) }
-    var voiceSensitivity by remember(companion.id) { mutableStateOf(context.prefString(settingKey("voiceSensitivity"), "Balanced")) }
+    var wakeAssistantId by remember(companion.id) {
+        mutableStateOf(
+            context.prefString("voice_wake_assistant_id", wakeAssistantIdFor(companion))
+                .takeIf { it == "luna" || it == "kai" }
+                ?: wakeAssistantIdFor(companion),
+        )
+    }
+    fun wakeSettingKey(name: String) = "voice_wake_${wakeAssistantId}_$name"
+    val wakePhrase = wakePhraseFor(wakeAssistantId)
+    var wakePhraseEnabled by remember(wakeAssistantId) { mutableStateOf(context.prefBoolean(wakeSettingKey("wakePhraseEnabled"), false)) }
+    var audioSource by remember(wakeAssistantId) { mutableStateOf(context.prefString(wakeSettingKey("audioSource"), "Phone microphone only when selected")) }
+    var bluetoothAccess by remember(wakeAssistantId) { mutableStateOf(context.prefBoolean(wakeSettingKey("bluetoothAccess"), false)) }
+    var voiceTrainingEnabled by remember(wakeAssistantId) { mutableStateOf(context.prefBoolean(wakeSettingKey("voiceTrainingEnabled"), false)) }
+    var trainingStatus by remember(wakeAssistantId) { mutableStateOf(context.prefString(wakeSettingKey("trainingStatus"), "Not trained yet")) }
+    var trainingSampleCount by remember(wakeAssistantId) { mutableStateOf(context.prefInt(wakeSettingKey("trainingSampleCount"), 0)) }
+    var voiceSensitivity by remember(wakeAssistantId) { mutableStateOf(context.prefString(wakeSettingKey("voiceSensitivity"), "Balanced")) }
     val companionNames = companions.map { it.name }
     val voiceOptions = voiceOptionsFor(companion.gender)
     val audioInputOptions = remember(context) { availableAudioInputSources(context) }
+    val voiceTrainingLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) {
+            trainingStatus = "Training canceled. Try again when ready."
+            return@rememberLauncherForActivityResult
+        }
+        val spoken = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+            .orEmpty()
+        if (spokenWakePhraseMatches(spoken, wakePhrase)) {
+            val nextCount = (trainingSampleCount + 1).coerceAtMost(3)
+            trainingSampleCount = nextCount
+            voiceTrainingEnabled = true
+            trainingStatus = if (nextCount >= 3) {
+                "Trained with 3 wake phrase samples."
+            } else {
+                "Sample $nextCount of 3 captured."
+            }
+        } else {
+            trainingStatus = "Try again. Heard: ${spoken.ifBlank { "nothing" }}."
+        }
+    }
+
+    fun startVoiceTrainingSample() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, wakePhrase)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            trainingStatus = "Speech recognition is not available on this device."
+        } else {
+            voiceTrainingLauncher.launch(intent)
+        }
+    }
 
     LaunchedEffect(companion.id, companion.gender, companion.voice) {
-        if (voiceOptions.isNotEmpty() && companion.voice !in voiceOptions) {
-            onVoiceSelected(voiceOptions.first())
+        val correctedVoice = voiceForGender(companion.gender, companion.voice)
+        if (correctedVoice != companion.voice) {
+            onVoiceSelected(correctedVoice)
         }
     }
 
@@ -5072,25 +5299,29 @@ private fun VoiceLiveSettingsScreen(
         microphone,
         speaker,
         voiceSpeed,
-        wakePhraseEnabled,
         answerStyle,
+        wakeAssistantId,
+        wakePhraseEnabled,
         audioSource,
         bluetoothAccess,
         voiceTrainingEnabled,
         trainingStatus,
+        trainingSampleCount,
         voiceSensitivity,
     ) {
         context.savePref(settingKey("voiceReplies"), voiceReplies)
         context.savePref(settingKey("microphone"), microphone)
         context.savePref(settingKey("speaker"), speaker)
         context.savePref(settingKey("voiceSpeed"), voiceSpeed)
-        context.savePref(settingKey("wakePhraseEnabled"), wakePhraseEnabled)
         context.savePref(settingKey("answerStyle"), answerStyle)
-        context.savePref(settingKey("audioSource"), audioSource)
-        context.savePref(settingKey("bluetoothAccess"), bluetoothAccess)
-        context.savePref(settingKey("voiceTrainingEnabled"), voiceTrainingEnabled)
-        context.savePref(settingKey("trainingStatus"), trainingStatus)
-        context.savePref(settingKey("voiceSensitivity"), voiceSensitivity)
+        context.savePref("voice_wake_assistant_id", wakeAssistantId)
+        context.savePref(wakeSettingKey("wakePhraseEnabled"), wakePhraseEnabled)
+        context.savePref(wakeSettingKey("audioSource"), audioSource)
+        context.savePref(wakeSettingKey("bluetoothAccess"), bluetoothAccess)
+        context.savePref(wakeSettingKey("voiceTrainingEnabled"), voiceTrainingEnabled)
+        context.savePref(wakeSettingKey("trainingStatus"), trainingStatus)
+        context.savePref(wakeSettingKey("trainingSampleCount"), trainingSampleCount)
+        context.savePref(wakeSettingKey("voiceSensitivity"), voiceSensitivity)
     }
 
     GradientBackground {
@@ -5124,9 +5355,15 @@ private fun VoiceLiveSettingsScreen(
             }
             GlassCard {
                 Text("Wake phrase", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                ToggleRow("Listen for Hey ${companion.name}", wakePhraseEnabled) { wakePhraseEnabled = it }
-                MiniStateCard("Phrase", "Hey ${companion.name}")
-                Text("${companion.name} will only listen when wake phrase is enabled and the selected audio source is available. Voice wake recognition is saved here and ready for speech-service wiring.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                SoftDropdown(
+                    label = "Wake assistant",
+                    selected = wakeAssistantName(wakeAssistantId),
+                    options = listOf("Luna", "Kai"),
+                    onSelected = { selected -> wakeAssistantId = selected.lowercase() },
+                )
+                ToggleRow("Listen for $wakePhrase", wakePhraseEnabled) { wakePhraseEnabled = it }
+                MiniStateCard("Phrase", wakePhrase)
+                Text("Wake phrase access is limited to Luna and Kai. Custom companions keep their own chat voice, but they do not register Bluetooth wake phrases.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Audio access", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -5138,12 +5375,13 @@ private fun VoiceLiveSettingsScreen(
                 )
                 ToggleRow("Allow Bluetooth audio devices", bluetoothAccess) { bluetoothAccess = it }
                 MiniStateCard("Current route", audioSource)
-                Text("Only audio inputs currently visible to Android appear here. Turn on or pair Bluetooth audio first, then reopen this screen if it is not listed.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Bluetooth wake routing is saved for ${wakeAssistantName(wakeAssistantId)} only. Turn on or pair Bluetooth audio first, then reopen this screen if it is not listed.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Voice training", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 ToggleRow("Recognize my voice", voiceTrainingEnabled) { voiceTrainingEnabled = it }
-                MiniStateCard("Training phrase", "Hey ${companion.name}")
+                MiniStateCard("Training phrase", wakePhrase)
+                MiniStateCard("Samples", "$trainingSampleCount / 3")
                 MiniStateCard("Training status", trainingStatus)
                 SoftDropdown(
                     label = "Voice match sensitivity",
@@ -5151,9 +5389,13 @@ private fun VoiceLiveSettingsScreen(
                     options = listOf("Gentle", "Balanced", "Strict"),
                     onSelected = { voiceSensitivity = it },
                 )
-                SecondarySoftButton("Record Sample: Hey ${companion.name}", onClick = { trainingStatus = "Sample captured. Add two more later for stronger recognition." })
-                SecondarySoftButton("Reset Voice Training", onClick = { trainingStatus = "Not trained yet" })
-                Text("Voice training is a placeholder flow until speech recognition and voice matching are connected.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                SecondarySoftButton("Record Sample", onClick = { startVoiceTrainingSample() })
+                SecondarySoftButton("Reset Training", onClick = {
+                    trainingSampleCount = 0
+                    voiceTrainingEnabled = false
+                    trainingStatus = "Not trained yet"
+                })
+                Text("Training checks the spoken wake phrase through Android speech recognition and saves progress for Luna or Kai.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Answer behavior", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -6155,7 +6397,21 @@ private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean
 private fun MiniStateCard(title: String, value: String) {
     val appearance = LocalAppAppearance.current
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Text(title, color = appearance.mutedText, modifier = Modifier.weight(1f))
-        Text(value, color = appearance.text, fontWeight = FontWeight.SemiBold)
+        Text(
+            title,
+            color = appearance.mutedText,
+            modifier = Modifier.weight(0.9f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            value,
+            color = appearance.text,
+            modifier = Modifier.weight(1.1f),
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+        )
     }
 }

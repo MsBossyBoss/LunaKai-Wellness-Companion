@@ -608,20 +608,45 @@ private fun loadCompanions(context: Context): List<CompanionProfile> {
 private fun orderedCompanions(companions: List<CompanionProfile>): List<CompanionProfile> {
     val defaults = defaultCompanions()
     val savedById = companions.associateBy { it.id }
-    val luna = (savedById["luna"] ?: defaults[0]).copy(id = "luna", name = "Luna", isMock = true)
-    val kai = (savedById["kai"] ?: defaults[1]).copy(id = "kai", name = "Kai", isMock = true)
+    val savedLuna = savedById["luna"] ?: defaults[0]
+    val savedKai = savedById["kai"] ?: defaults[1]
+    val luna = savedLuna.copy(
+        id = "luna",
+        name = "Luna",
+        gender = "Female",
+        voice = voiceForGender("Female", savedLuna.voice),
+        isMock = true,
+    )
+    val kai = savedKai.copy(
+        id = "kai",
+        name = "Kai",
+        gender = "Male",
+        voice = voiceForGender("Male", savedKai.voice),
+        isMock = true,
+    )
     val customCompanions = companions
         .filterNot { it.id == "luna" || it.id == "kai" || it.id.startsWith("draft-") }
         .distinctBy { it.id }
+        .map { it.copy(voice = voiceForGender(it.gender, it.voice)) }
     return listOf(luna, kai) + customCompanions
 }
 
 private fun saveCompanions(context: Context, companions: List<CompanionProfile>) {
     val normalized = orderedCompanions(companions).map { companion ->
         when (companion.id) {
-            "luna" -> companion.copy(name = "Luna", isMock = true)
-            "kai" -> companion.copy(name = "Kai", isMock = true)
-            else -> companion
+            "luna" -> companion.copy(
+                name = "Luna",
+                gender = "Female",
+                voice = voiceForGender("Female", companion.voice),
+                isMock = true,
+            )
+            "kai" -> companion.copy(
+                name = "Kai",
+                gender = "Male",
+                voice = voiceForGender("Male", companion.voice),
+                isMock = true,
+            )
+            else -> companion.copy(voice = voiceForGender(companion.gender, companion.voice))
         }
     }
     context.savePref(KEY_COMPANIONS, JSONArray(normalized.map { it.toJson() }).toString())
@@ -1626,7 +1651,6 @@ private fun PremiumTopBar(
                                     when (item) {
                                         "Change Companion", "Manage My Companions" -> onNavigate(AppRoute.Companions)
                                         "Open Settings" -> onNavigate(AppRoute.Preferences)
-                                        "Voice Settings" -> onNavigate(AppRoute.VoiceLiveSettings)
                                         "Privacy Settings" -> onNavigate(AppRoute.PrivacySettings)
                                         "View Disclaimer" -> onNavigate(AppRoute.Disclaimer)
                                         "Video", "Video Chat" -> onNavigate(AppRoute.LiveCompanionCall)
@@ -1662,7 +1686,7 @@ private fun overflowItems(route: AppRoute): List<String> {
         AppRoute.Home -> listOf("Change Companion", "Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.Chat -> listOf("Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.TextChat -> listOf("Video Chat", "Phone", "Change Companion", "Open Settings", "Clear Chat", "Save Chat to Journal")
-        AppRoute.LiveCompanionCall -> listOf("Change Companion", "Voice Settings", "Companion Appearance", "Save Call Notes to Journal", "Turn Captions On/Off", "Privacy Settings", "End Session")
+        AppRoute.LiveCompanionCall -> listOf("Change Companion", "Open Settings", "Companion Appearance", "Save Call Notes to Journal", "Privacy Settings", "End Session")
         AppRoute.Journal -> listOf("Storage Location", "Save on Device", "Save to Cloud", "Save to Both", "View Journal Entries", "Export Journal", "Clear Draft", "Privacy Settings")
         AppRoute.Fitness -> listOf("Progress Tracker", "Open Wellness")
         AppRoute.FitnessProgress -> listOf("Open Wellness")
@@ -5269,7 +5293,7 @@ private fun VoiceLiveSettingsScreen(
         }
     }
 
-    fun startVoiceTrainingSample() {
+    fun launchVoiceTrainingRecognizer() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PROMPT, wakePhrase)
@@ -5279,6 +5303,23 @@ private fun VoiceLiveSettingsScreen(
             trainingStatus = "Speech recognition is not available on this device."
         } else {
             voiceTrainingLauncher.launch(intent)
+        }
+    }
+    val voiceTrainingPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted || context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            trainingStatus = "Listening for $wakePhrase."
+            launchVoiceTrainingRecognizer()
+        } else {
+            trainingStatus = "Microphone permission is needed before voice training can record a sample."
+        }
+    }
+    fun startVoiceTrainingSample() {
+        if (!context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            trainingStatus = "Allow microphone access to train ${wakeAssistantName(wakeAssistantId)}."
+            voiceTrainingPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            trainingStatus = "Listening for $wakePhrase."
+            launchVoiceTrainingRecognizer()
         }
     }
 
@@ -5382,7 +5423,7 @@ private fun VoiceLiveSettingsScreen(
                 ToggleRow("Recognize my voice", voiceTrainingEnabled) { voiceTrainingEnabled = it }
                 MiniStateCard("Training phrase", wakePhrase)
                 MiniStateCard("Samples", "$trainingSampleCount / 3")
-                MiniStateCard("Training status", trainingStatus)
+                TrainingStatusBlock(trainingStatus)
                 SoftDropdown(
                     label = "Voice match sensitivity",
                     selected = voiceSensitivity,
@@ -6390,6 +6431,23 @@ private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, color = TextDark, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun TrainingStatusBlock(status: String) {
+    val appearance = LocalAppAppearance.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MediumShape)
+            .background(appearance.control.copy(alpha = 0.78f))
+            .border(1.dp, appearance.border, MediumShape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text("Training status", color = appearance.mutedText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(status, color = appearance.text, fontSize = 14.sp, lineHeight = 19.sp)
     }
 }
 

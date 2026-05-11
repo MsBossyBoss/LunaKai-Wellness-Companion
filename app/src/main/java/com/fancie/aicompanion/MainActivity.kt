@@ -1872,7 +1872,11 @@ private fun bestInstalledVoiceForPreview(engine: TextToSpeech, voiceName: String
     if (genderedMatches.isNotEmpty()) {
         return genderedMatches.first()
     }
-    return if (wantsMale) null else englishVoices.firstOrNull { !isInstalledMaleVoice(it) }
+    return if (wantsMale) {
+        englishVoices.firstOrNull { !isInstalledFemaleVoice(it) } ?: englishVoices.first()
+    } else {
+        englishVoices.firstOrNull { !isInstalledMaleVoice(it) } ?: englishVoices.first()
+    }
 }
 
 private fun wakeAssistantIdFor(companion: CompanionProfile): String {
@@ -2540,7 +2544,8 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     }
     val context = LocalContext.current
     val openRouterKey = context.prefString("openrouter_api_key", "")
-    val geminiContext = remember(companion, openRouterKey) {
+    val deepSeekKey = context.prefString("deepseek_api_key", "")
+    val geminiContext = remember(companion, openRouterKey, deepSeekKey) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2562,6 +2567,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
             adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
             openRouterApiKey = openRouterKey,
+            deepSeekApiKey = deepSeekKey,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2697,7 +2703,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     val context = LocalContext.current
     val liveRepository = remember { GeminiLiveCompanionRepository() }
     val openRouterKey = context.prefString("openrouter_api_key", "")
-    val geminiContext = remember(companion, openRouterKey) {
+    val deepSeekKey = context.prefString("deepseek_api_key", "")
+    val geminiContext = remember(companion, openRouterKey, deepSeekKey) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2719,6 +2726,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
             adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
             openRouterApiKey = openRouterKey,
+            deepSeekApiKey = deepSeekKey,
         )
     }
     var liveSessionState by remember { mutableStateOf<GeminiLiveSessionState>(GeminiLiveSessionState.Idle) }
@@ -4003,12 +4011,14 @@ private fun RoleplayDetails(
         adultRoleplaySelected -> {
             val settingsContext = LocalContext.current
             var openRouterKey by remember { mutableStateOf(settingsContext.prefString("openrouter_api_key", "")) }
+            var deepSeekKey by remember { mutableStateOf(settingsContext.prefString("deepseek_api_key", "")) }
             var showAdultProviderSetup by remember { mutableStateOf(false) }
-            val providerName = if (bdsmIdentitySettings.adultProviderEndpoint.isBlank() || bdsmIdentitySettings.adultProviderEndpoint.contains("openrouter", ignoreCase = true)) {
-                "OpenRouter"
-            } else {
-                "Custom endpoint"
+            val providerName = when {
+                bdsmIdentitySettings.adultProviderEndpoint.contains("deepseek", ignoreCase = true) -> "DeepSeek"
+                bdsmIdentitySettings.adultProviderEndpoint.isBlank() || bdsmIdentitySettings.adultProviderEndpoint.contains("openrouter", ignoreCase = true) -> "OpenRouter"
+                else -> "Custom endpoint"
             }
+            val activeProviderKey = if (providerName == "DeepSeek") deepSeekKey else openRouterKey
             LaunchedEffect(adultRoleplaySelected, bdsmIdentitySettings.adultConsentConfirmed) {
                 if (adultRoleplaySelected && bdsmIdentitySettings.adultConsentConfirmed) {
                     showAdultProviderSetup = true
@@ -4043,10 +4053,18 @@ private fun RoleplayDetails(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 SolidInputField(
-                    value = openRouterKey,
-                    onValueChange = { openRouterKey = it; settingsContext.savePref("openrouter_api_key", it) },
+                    value = activeProviderKey,
+                    onValueChange = { key ->
+                        if (providerName == "DeepSeek") {
+                            deepSeekKey = key
+                            settingsContext.savePref("deepseek_api_key", key)
+                        } else {
+                            openRouterKey = key
+                            settingsContext.savePref("openrouter_api_key", key)
+                        }
+                    },
                     label = "$providerName API key",
-                    placeholder = "sk-or-v1-...",
+                    placeholder = if (providerName == "DeepSeek") "sk-..." else "sk-or-v1-...",
                     modifier = Modifier.weight(1f),
                     visualTransformation = PasswordVisualTransformation(),
                 )
@@ -4066,6 +4084,11 @@ private fun RoleplayDetails(
                         openRouterKey = key
                         settingsContext.savePref("openrouter_api_key", key)
                     },
+                    deepSeekKey = deepSeekKey,
+                    onDeepSeekKeyChange = { key ->
+                        deepSeekKey = key
+                        settingsContext.savePref("deepseek_api_key", key)
+                    },
                     modelName = bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
                     onModelNameChange = onAdultProviderModelChange,
                     customEndpoint = bdsmIdentitySettings.adultProviderEndpoint,
@@ -4073,6 +4096,12 @@ private fun RoleplayDetails(
                     onProviderChoiceChange = { choice ->
                         if (choice == "OpenRouter") {
                             onAdultProviderEndpointChange("")
+                            if (bdsmIdentitySettings.adultProviderModel.startsWith("deepseek")) {
+                                onAdultProviderModelChange(AdultRoleplayRepository.DEFAULT_ADULT_MODEL)
+                            }
+                        } else if (choice == "DeepSeek") {
+                            onAdultProviderEndpointChange(AdultRoleplayRepository.DEEPSEEK_ENDPOINT)
+                            onAdultProviderModelChange(AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL)
                         } else if (bdsmIdentitySettings.adultProviderEndpoint.isBlank()) {
                             onAdultProviderEndpointChange("https://")
                         }
@@ -4097,6 +4126,8 @@ private fun AdultProviderSetupDialog(
     providerName: String,
     openRouterKey: String,
     onOpenRouterKeyChange: (String) -> Unit,
+    deepSeekKey: String,
+    onDeepSeekKeyChange: (String) -> Unit,
     modelName: String,
     onModelNameChange: (String) -> Unit,
     customEndpoint: String,
@@ -4111,7 +4142,7 @@ private fun AdultProviderSetupDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "BDSM mode uses a separate adult-compatible provider after consent and safety checks. Leave the provider as OpenRouter unless you run your own OpenAI-compatible server.",
+                    "BDSM mode uses a separate provider after consent and safety checks. Use OpenRouter for adult-compatible roleplay, DeepSeek when you want that key/model, or a custom OpenAI-compatible server.",
                     color = TextMuted,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -4119,7 +4150,7 @@ private fun AdultProviderSetupDialog(
                 SoftDropdown(
                     label = "Provider",
                     selected = providerName,
-                    options = listOf("OpenRouter", "Custom endpoint"),
+                    options = listOf("OpenRouter", "DeepSeek", "Custom endpoint"),
                     onSelected = onProviderChoiceChange,
                 )
                 SolidInputField(
@@ -4127,6 +4158,13 @@ private fun AdultProviderSetupDialog(
                     onValueChange = onOpenRouterKeyChange,
                     label = "OpenRouter API key",
                     placeholder = "sk-or-v1-...",
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                SolidInputField(
+                    value = deepSeekKey,
+                    onValueChange = onDeepSeekKeyChange,
+                    label = "DeepSeek API key",
+                    placeholder = "sk-...",
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 SoftDropdown(
@@ -4142,7 +4180,7 @@ private fun AdultProviderSetupDialog(
                     placeholder = "Leave blank for OpenRouter",
                 )
                 Text(
-                    "Custom endpoints are normalized automatically. If you type openrouter.ai or leave it blank, LunaKai uses the correct OpenRouter chat endpoint.",
+                    "Custom endpoints are normalized automatically. Blank or openrouter.ai uses OpenRouter; api.deepseek.com uses DeepSeek.",
                     color = TextMuted,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,
@@ -5478,20 +5516,12 @@ private fun VoiceLiveSettingsScreen(
         }
         engine.language = Locale.US
         val installedVoice = bestInstalledVoiceForPreview(engine, voiceName)
-        if (installedVoice == null && isMaleVoiceOption(voiceName)) {
-            voicePreviewStatus = "No installed male Text-to-Speech voice was found on this phone. Install a male voice in Android Text-to-speech settings, then try again."
-            return
-        }
         if (installedVoice != null) {
             engine.voice = installedVoice
         }
         engine.setPitch(voicePreviewPitch(voiceName))
         engine.setSpeechRate(voicePreviewRate(voiceName))
-        voicePreviewStatus = if (installedVoice != null) {
-            "Playing $voiceName with installed voice: ${installedVoice.name}."
-        } else {
-            "Playing $voiceName preview."
-        }
+        voicePreviewStatus = "Playing $voiceName preview."
         engine.speak(
             voicePreviewSample(companion.name, voiceName),
             TextToSpeech.QUEUE_FLUSH,
@@ -5521,14 +5551,6 @@ private fun VoiceLiveSettingsScreen(
                     onPreview = { playVoicePreview(it) },
                 )
                 Text(voicePreviewStatus, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
-                if (companion.gender == "Male") {
-                    Text(
-                        "Male previews use a real installed male Text-to-Speech voice when the phone provides one. If none is installed, the app will not play a female voice as a male preview.",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                    )
-                }
                 SoftDropdown(
                     label = "Voice speed",
                     selected = voiceSpeed,

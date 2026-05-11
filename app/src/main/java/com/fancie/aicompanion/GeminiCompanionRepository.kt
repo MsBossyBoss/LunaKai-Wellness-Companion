@@ -29,6 +29,7 @@ data class GeminiCompanionContext(
     val adultProviderEndpoint: String = "",
     val adultProviderModel: String = "gryphe/mythomax-l2-13b",
     val openRouterApiKey: String = "",
+    val deepSeekApiKey: String = "",
 )
 
 sealed interface GeminiCompanionState {

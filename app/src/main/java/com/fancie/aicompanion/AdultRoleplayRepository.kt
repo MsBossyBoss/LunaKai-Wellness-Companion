@@ -39,10 +39,13 @@ class AdultRoleplayRepository {
             )
         }
 
+        val endpoint = normalizedEndpoint(companion.adultProviderEndpoint)
         val config = AdultRoleplayConfig(
             enabled = companion.adultProviderEnabled,
-            endpointUrl = normalizedEndpoint(companion.adultProviderEndpoint),
-            modelName = companion.adultProviderModel.ifBlank { DEFAULT_ADULT_MODEL },
+            endpointUrl = endpoint,
+            modelName = companion.adultProviderModel.ifBlank {
+                if (isDeepSeekEndpoint(endpoint)) DEFAULT_DEEPSEEK_MODEL else DEFAULT_ADULT_MODEL
+            },
         )
         if (!config.enabled) {
             return@withContext GeminiCompanionState.Error(
@@ -50,9 +53,15 @@ class AdultRoleplayRepository {
             )
         }
         val isOpenRouter = isOpenRouterEndpoint(config.endpointUrl)
+        val isDeepSeek = isDeepSeekEndpoint(config.endpointUrl)
         if (isOpenRouter && companion.openRouterApiKey.isBlank()) {
             return@withContext GeminiCompanionState.Error(
                 "Add your OpenRouter API key in the companion's BDSM settings to use the adult AI provider. Sign up free at openrouter.ai.",
+            )
+        }
+        if (isDeepSeek && companion.deepSeekApiKey.isBlank()) {
+            return@withContext GeminiCompanionState.Error(
+                "Add your DeepSeek API key in the companion's BDSM settings to use DeepSeek for adult-mode routing.",
             )
         }
 
@@ -68,6 +77,8 @@ class AdultRoleplayRepository {
                     setRequestProperty("Authorization", "Bearer ${companion.openRouterApiKey}")
                     setRequestProperty("HTTP-Referer", "https://lunakai.app")
                     setRequestProperty("X-Title", "LunaKai Wellness Companion")
+                } else if (isDeepSeek) {
+                    setRequestProperty("Authorization", "Bearer ${companion.deepSeekApiKey}")
                 }
             }
             OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
@@ -87,9 +98,9 @@ class AdultRoleplayRepository {
             Log.e(TAG, "Adult roleplay provider request failed", error)
             val msg = when {
                 error.message?.contains("401") == true || error.message?.contains("403") == true ->
-                    "OpenRouter API key is incorrect or expired. Check your key in companion BDSM settings."
+                    "Adult AI provider key is incorrect or expired. Check your OpenRouter or DeepSeek key in companion BDSM settings."
                 error.message?.contains("402") == true ->
-                    "OpenRouter account has no credits. Add credits at openrouter.ai."
+                    "Adult AI provider account has no credits. Add credits with the selected provider."
                 error.message?.contains("429") == true ->
                     "Adult AI provider is rate-limited. Wait a moment and try again."
                 error.message?.contains("no protocol", ignoreCase = true) == true ->
@@ -111,12 +122,16 @@ class AdultRoleplayRepository {
         val lowercase = withProtocol.lowercase()
         return if (lowercase == "https://openrouter.ai" || lowercase == "https://openrouter.ai/api" || lowercase.contains("openrouter.ai")) {
             OPENROUTER_ENDPOINT
+        } else if (lowercase == "https://api.deepseek.com" || lowercase == "https://api.deepseek.com/v1" || lowercase.contains("api.deepseek.com")) {
+            DEEPSEEK_ENDPOINT
         } else {
             withProtocol
         }
     }
 
     private fun isOpenRouterEndpoint(endpoint: String): Boolean = endpoint.contains("openrouter.ai", ignoreCase = true)
+
+    private fun isDeepSeekEndpoint(endpoint: String): Boolean = endpoint.contains("deepseek", ignoreCase = true)
 
     private fun buildPayload(
         companion: GeminiCompanionContext,
@@ -209,13 +224,17 @@ class AdultRoleplayRepository {
     companion object {
         private const val TAG = "AdultRoleplayRepository"
         const val OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+        const val DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
         const val DEFAULT_ADULT_MODEL = "gryphe/mythomax-l2-13b"
+        const val DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
         val RECOMMENDED_MODELS = listOf(
             "gryphe/mythomax-l2-13b",
             "undi95/toppy-m-7b:nitro",
             "neversfw/noromaid-20b",
             "cognitivecomputations/dolphin-mixtral-8x22b",
             "nousresearch/hermes-3-llama-3.1-405b",
+            "deepseek-chat",
+            "deepseek-reasoner",
         )
     }
 }

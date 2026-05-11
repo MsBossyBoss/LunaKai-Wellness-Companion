@@ -18,6 +18,8 @@ import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.provider.MediaStore
 import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
+import android.speech.tts.Voice
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
@@ -105,6 +107,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -120,6 +124,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalTime
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -292,7 +297,7 @@ private enum class AppRoute(val title: String, val subtitle: String) {
     Preferences("Settings", "Manage your companion, privacy, storage, and support settings."),
     ProfileInfo("Profile Info", "Manage your profile photo and personal details."),
     AccountSettings("Account Settings", "Manage sign-in, account access, and sign out."),
-    VoiceLiveSettings("Voice & Live Settings", "Choose voice, microphone, speaker, and video chat options."),
+    VoiceLiveSettings("Voice & Live Settings", "Choose voice, microphone, speaker, and wake phrase options."),
     JournalStorageSettings("Journal Storage", "Choose where entries are saved."),
     PrivacySettings("Privacy Settings", "Control app lock, sync, previews, and data export."),
     NotificationSettings("Notifications", "Choose reminders, check-ins, and gentle prompts."),
@@ -325,7 +330,6 @@ private enum class JournalEntryType(val label: String) {
 private enum class LiveMode {
     TEXT,
     VOICE,
-    VIDEO_STYLE,
 }
 
 private data class LiveCompanionCallUiState(
@@ -1148,7 +1152,6 @@ private fun FancieApp() {
                     companion = activeCompanion,
                     onText = { navigateTo(AppRoute.TextChat) },
                     onCall = { navigateTo(AppRoute.LiveCompanionCall) },
-                    onVideo = { navigateTo(AppRoute.LiveCompanionCall) },
                 )
                 AppRoute.TextChat -> CompanionChatScreen(
                     companion = activeCompanion,
@@ -1650,10 +1653,10 @@ private fun PremiumTopBar(
                                     expanded = false
                                     when (item) {
                                         "Change Companion", "Manage My Companions" -> onNavigate(AppRoute.Companions)
+                                        "Voice & Live Settings" -> onNavigate(AppRoute.VoiceLiveSettings)
                                         "Open Settings" -> onNavigate(AppRoute.Preferences)
                                         "Privacy Settings" -> onNavigate(AppRoute.PrivacySettings)
                                         "View Disclaimer" -> onNavigate(AppRoute.Disclaimer)
-                                        "Video", "Video Chat" -> onNavigate(AppRoute.LiveCompanionCall)
                                         "Phone" -> onNavigate(AppRoute.LiveCompanionCall)
                                         "Clear Chat" -> scope.launch { clearCloudChatMessages(companion.id) }
                                         "Save Chat to Journal" -> onNavigate(AppRoute.Journal)
@@ -1685,7 +1688,7 @@ private fun overflowItems(route: AppRoute): List<String> {
     return when (route) {
         AppRoute.Home -> listOf("Change Companion", "Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.Chat -> listOf("Open Settings", "View Disclaimer", "Sign Out")
-        AppRoute.TextChat -> listOf("Video Chat", "Phone", "Change Companion", "Open Settings", "Clear Chat", "Save Chat to Journal")
+        AppRoute.TextChat -> listOf("Phone", "Change Companion", "Open Settings", "Clear Chat", "Save Chat to Journal")
         AppRoute.LiveCompanionCall -> listOf("Change Companion", "Open Settings", "Companion Appearance", "Save Call Notes to Journal", "Privacy Settings", "End Session")
         AppRoute.Journal -> listOf("Storage Location", "Save on Device", "Save to Cloud", "Save to Both", "View Journal Entries", "Export Journal", "Clear Draft", "Privacy Settings")
         AppRoute.Fitness -> listOf("Progress Tracker", "Open Wellness")
@@ -1698,7 +1701,6 @@ private fun overflowItems(route: AppRoute): List<String> {
 
 private fun menuOptionIcon(item: String): Int {
     return when {
-        item == "Video" || item == "Video Chat" -> R.drawable.ic_video
         item == "Phone" || item.contains("Live", ignoreCase = true) || item.contains("End", ignoreCase = true) -> R.drawable.ic_call_end
         item.contains("Companion", ignoreCase = true) -> R.drawable.ic_profile
         item.contains("Voice", ignoreCase = true) -> R.drawable.ic_speaker
@@ -1775,6 +1777,10 @@ private fun femaleVoiceOptions() = listOf(
 private fun maleVoiceOptions() = listOf(
     "Calm Male",
     "Deep Male",
+    "Velvet Male",
+    "Low Velvet Male",
+    "Silky Soft Male",
+    "Warm Whisper Male",
     "Protective Male",
     "Smooth Male",
     "Warm Male",
@@ -1793,6 +1799,80 @@ private fun voiceOptionsFor(gender: String) = when (gender) {
 private fun voiceForGender(gender: String, currentVoice: String): String {
     val allowed = voiceOptionsFor(gender)
     return currentVoice.takeIf { it in allowed } ?: allowed.firstOrNull() ?: currentVoice
+}
+
+private fun isMaleVoiceOption(voiceName: String): Boolean = voiceName in maleVoiceOptions()
+
+private fun voicePreviewPitch(voiceName: String): Float = when {
+    voiceName.contains("Deep", ignoreCase = true) -> 0.62f
+    voiceName.contains("Low", ignoreCase = true) -> 0.66f
+    voiceName.contains("Velvet", ignoreCase = true) -> 0.68f
+    voiceName.contains("Silky", ignoreCase = true) -> 0.72f
+    isMaleVoiceOption(voiceName) -> 0.70f
+    voiceName.contains("Bright", ignoreCase = true) -> 1.18f
+    voiceName.contains("Whisper", ignoreCase = true) -> 0.94f
+    else -> 1.06f
+}
+
+private fun voicePreviewRate(voiceName: String): Float = when {
+    voiceName.contains("Motivational", ignoreCase = true) -> 1.05f
+    voiceName.contains("Velvet", ignoreCase = true) || voiceName.contains("Silky", ignoreCase = true) -> 0.84f
+    voiceName.contains("Whisper", ignoreCase = true) -> 0.82f
+    voiceName.contains("Calm", ignoreCase = true) || voiceName.contains("Soft", ignoreCase = true) -> 0.88f
+    else -> 0.95f
+}
+
+private fun voicePreviewDescription(voiceName: String): String {
+    val voiceGroup = if (isMaleVoiceOption(voiceName)) "Male voice preview" else "Female voice preview"
+    return "$voiceGroup - ${voiceName.removeSuffix(" Male").removeSuffix(" Female")}"
+}
+
+private fun voicePreviewSample(companionName: String, voiceName: String): String {
+    val introName = companionName.ifBlank { "your companion" }
+    return "Hi, I'm $introName. This is the $voiceName preview. I can speak with this tone when voice replies are connected."
+}
+
+private fun installedEnglishVoices(engine: TextToSpeech): List<Voice> {
+    return engine.voices
+        ?.filter { voice -> voice.locale.language.equals(Locale.ENGLISH.language, ignoreCase = true) }
+        ?.sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }.thenByDescending { it.quality })
+        .orEmpty()
+}
+
+private fun voiceHasAnyMarker(voice: Voice, markers: List<String>): Boolean {
+    val searchable = buildString {
+        append(voice.name)
+        append(' ')
+        append(voice.locale.displayName)
+        voice.features?.forEach { feature ->
+            append(' ')
+            append(feature)
+        }
+    }.lowercase(Locale.US)
+    return markers.any { marker -> searchable.contains(marker) }
+}
+
+private fun isInstalledMaleVoice(voice: Voice): Boolean {
+    return voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark"))
+        && !voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen"))
+}
+
+private fun isInstalledFemaleVoice(voice: Voice): Boolean {
+    return voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen"))
+        && !voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark"))
+}
+
+private fun bestInstalledVoiceForPreview(engine: TextToSpeech, voiceName: String): Voice? {
+    val englishVoices = installedEnglishVoices(engine)
+    if (englishVoices.isEmpty()) return null
+    val wantsMale = isMaleVoiceOption(voiceName)
+    val genderedMatches = englishVoices.filter { voice ->
+        if (wantsMale) isInstalledMaleVoice(voice) else isInstalledFemaleVoice(voice)
+    }
+    if (genderedMatches.isNotEmpty()) {
+        return genderedMatches.first()
+    }
+    return if (wantsMale) null else englishVoices.firstOrNull { !isInstalledMaleVoice(it) }
 }
 
 private fun wakeAssistantIdFor(companion: CompanionProfile): String {
@@ -2399,7 +2479,6 @@ private fun ChatConnectScreen(
     companion: CompanionProfile,
     onText: () -> Unit,
     onCall: () -> Unit,
-    onVideo: () -> Unit,
 ) {
     GradientBackground {
         ScreenScroll {
@@ -2423,7 +2502,6 @@ private fun ChatConnectScreen(
                 ConnectOptionCard("Text", "Message quietly.", R.drawable.ic_chat_bubble, RosePink, Modifier.weight(1f), onText)
                 ConnectOptionCard("Call", "Phone-style live call.", R.drawable.ic_call_end, CalmBlue, Modifier.weight(1f), onCall)
             }
-            ConnectOptionCard("Video Chat", "See your companion's face while talking.", R.drawable.ic_video, AccentPurple, Modifier.fillMaxWidth(), onVideo)
         }
     }
 }
@@ -2460,7 +2538,9 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     val experience = remember(companion.id, companion.characterMode, companion.supportFocus, companion.communicationStyle, companion.personalityTraits) {
         calculateCompanionExperience(companion)
     }
-    val geminiContext = remember(companion) {
+    val context = LocalContext.current
+    val openRouterKey = context.prefString("openrouter_api_key", "")
+    val geminiContext = remember(companion, openRouterKey) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2480,7 +2560,8 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
             adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
             adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
-            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel,
+            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+            openRouterApiKey = openRouterKey,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2615,7 +2696,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val liveRepository = remember { GeminiLiveCompanionRepository() }
-    val geminiContext = remember(companion) {
+    val openRouterKey = context.prefString("openrouter_api_key", "")
+    val geminiContext = remember(companion, openRouterKey) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2635,7 +2717,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
             adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
             adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
-            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel,
+            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+            openRouterApiKey = openRouterKey,
         )
     }
     var liveSessionState by remember { mutableStateOf<GeminiLiveSessionState>(GeminiLiveSessionState.Idle) }
@@ -2644,7 +2727,6 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     var permissionMessage by remember { mutableStateOf<String?>(null) }
     fun startGeminiLive(mode: LiveMode) {
         val modeLabel = when (mode) {
-            LiveMode.VIDEO_STYLE -> "video chat with the companion's visual avatar"
             LiveMode.VOICE -> "voice call"
             LiveMode.TEXT -> "text chat"
         }
@@ -2799,30 +2881,15 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                     }
                 }
 
-                if (state.isCaptionOn) {
-                    GlassCard {
-                        Text("Live Captions", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text("\"${state.currentCaption}\"", color = TextMuted, fontSize = 16.sp, lineHeight = 22.sp)
-                    }
-                }
-                LiveSessionStatusCard(liveSessionState = liveSessionState, permissionMessage = permissionMessage)
-
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                     ModeChip("Text Chat", state.selectedMode == LiveMode.TEXT) {
                         stopGeminiLive()
                         state = state.copy(selectedMode = LiveMode.TEXT)
                         showTextChat = true
                     }
-                    ModeChip("Voice Chat", state.selectedMode == LiveMode.VOICE) { requestOrStartGeminiLive(LiveMode.VOICE) }
-                    ModeChip("Video Chat", state.selectedMode == LiveMode.VIDEO_STYLE) { requestOrStartGeminiLive(LiveMode.VIDEO_STYLE) }
-                }
-
-                if (state.selectedMode == LiveMode.VIDEO_STYLE) {
-                    CompanionVideoChatPanel(
-                        companion = companion,
-                        speaking = state.isCompanionSpeaking || state.isMicOn,
-                        status = callDisplayStatus(state),
-                    )
+                    ModeChip("Voice Chat", state.selectedMode == LiveMode.VOICE) {
+                        requestOrStartGeminiLive(LiveMode.VOICE)
+                    }
                 }
 
                 captureMessage?.let { message ->
@@ -2836,11 +2903,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                     Text("Call Controls", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                         CallControlButton("Mic", R.drawable.ic_mic, state.isMicOn, RosePink.copy(alpha = 0.18f + micGlow * 0.42f)) {
-                            if (state.isMicOn) {
-                                stopGeminiLive()
-                            } else {
-                                requestOrStartGeminiLive(if (state.selectedMode == LiveMode.VIDEO_STYLE) LiveMode.VIDEO_STYLE else LiveMode.VOICE)
-                            }
+                            if (state.isMicOn) stopGeminiLive() else requestOrStartGeminiLive(LiveMode.VOICE)
                         }
                         CallControlButton("Speaker", R.drawable.ic_speaker, state.isSpeakerOn, CalmBlue) {
                             state = state.copy(isSpeakerOn = !state.isSpeakerOn)
@@ -2909,7 +2972,9 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                                 .verticalScroll(liveChatScrollState),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            chatMessages.ifEmpty { listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = stableChatIdForCompanion(companion.id), companionId = companion.id, text = FRESH_CHAT_GREETING)) }.forEach { ChatBubble(it) }
+                            chatMessages.ifEmpty { listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = stableChatIdForCompanion(companion.id), companionId = companion.id, text = FRESH_CHAT_GREETING)) }.forEach {
+                                ChatBubble(it, centeredWide = true)
+                            }
                         }
                         liveChatStatus?.let { Text(it, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp) }
                         OutlinedTextField(
@@ -2938,7 +3003,6 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                                     if (textInput.isNotBlank() && !liveIsTyping) {
                                         val userText = textInput.trim()
                                         val mode = when (state.selectedMode) {
-                                            LiveMode.VIDEO_STYLE -> ChatMessage.MODE_VIDEO
                                             LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
@@ -3104,56 +3168,6 @@ private fun CameraPreviewPanel(
 }
 
 @Composable
-private fun CompanionVideoChatPanel(
-    companion: CompanionProfile,
-    speaking: Boolean,
-    status: String,
-) {
-    val transition = rememberInfiniteTransition(label = "companion-video-avatar")
-    val pulse by transition.animateFloat(
-        initialValue = 0.15f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(900), repeatMode = RepeatMode.Reverse),
-        label = "video-pulse",
-    )
-    GlassCard(background = CardDark.copy(alpha = 0.94f)) {
-        Text("Video Chat", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text("The screen stays on your companion's face. Only one live voice session can run at a time.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(310.dp)
-                .clip(ExtraLargeShape)
-                .background(Brush.verticalGradient(listOf(DeepPlumBlack, CardAccent, AppBlack)))
-                .border(1.dp, AccentPink.copy(alpha = 0.36f), ExtraLargeShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            SoftGlowDot(Modifier.align(Alignment.TopStart).padding(28.dp), RosePink, pulse)
-            SoftGlowDot(Modifier.align(Alignment.TopEnd).padding(32.dp), AccentPurple, 1f - pulse)
-            Box(
-                modifier = Modifier
-                    .size((190 + if (speaking) pulse * 34 else 0f).dp)
-                    .clip(CircleShape)
-                    .border(3.dp, AccentPink.copy(alpha = 0.25f + pulse * 0.38f), CircleShape),
-            )
-            CompanionAvatar(size = 156.dp, label = companion.name.take(2), glow = true, photoUri = companion.photoUri, imageResId = companion.imageResId)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.42f))
-                    .padding(16.dp),
-            ) {
-                Column {
-                    Text(companion.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text(status, color = Color.White.copy(alpha = 0.82f), fontSize = 14.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun CameraPreviewSurface(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val activity = remember(context) { context.findComponentActivity() }
@@ -3263,7 +3277,7 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                     SoftStatusChip("Ready to connect", SuccessGreen)
                     Text(companion.voice, color = TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
                     Text(
-                        "Text, talk, or sit with your companion in a premium live space. Video Chat keeps the companion's face on screen while voice connects through Gemini Live.",
+                        "Text, talk, or sit with your companion in a premium live space. Voice Chat connects through Gemini Live when your Firebase setup is ready.",
                         color = TextMuted,
                         textAlign = TextAlign.Center,
                         lineHeight = 21.sp,
@@ -3271,16 +3285,10 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                     )
                 }
             }
-            CompanionVideoChatPanel(companion = companion, speaking = false, status = "Ready for Video Chat")
             PrimaryGradientButton("Open Live Companion Call", onClick = { onNavigate(AppRoute.LiveCompanionCall) })
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 QuickActionCard("Text Chat", "Continue the conversation by typing.", "chat", RosePink, Modifier.weight(1f)) { onNavigate(AppRoute.TextChat) }
                 QuickActionCard("Voice Chat", "Microphone-ready companion mode.", "voice", CalmBlue, Modifier.weight(1f)) { onNavigate(AppRoute.LiveCompanionCall) }
-            }
-            QuickActionCard("Video Chat", "See your companion's face while talking.", "video", AccentPurple, Modifier.fillMaxWidth()) { onNavigate(AppRoute.LiveCompanionCall) }
-            GlassCard {
-                Text("Video Chat is companion-facing.", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("This version shows the selected companion photo/avatar with live voice status. Full photo-to-talking-avatar lip sync requires a dedicated avatar animation service later.", color = TextMuted, lineHeight = 21.sp)
             }
         }
     }
@@ -3411,7 +3419,7 @@ private fun PersonalityBuilderScreen(
 ) {
     val genderOptions = listOf("Female", "Male", "Nonbinary", "Custom", "No preference")
     val femaleVoiceOptions = listOf("Soft Female", "Warm Female", "Confident Female", "Sultry Calm Female", "Bright Female", "Deep Feminine", "Gentle Whisper Female")
-    val maleVoiceOptions = listOf("Calm Male", "Deep Male", "Protective Male", "Smooth Male", "Warm Male", "Motivational Male", "Soft-Spoken Male")
+    val maleVoiceOptions = maleVoiceOptions()
     val neutralVoiceOptions = listOf("Neutral Calm", "Neutral Bright", "Custom Voice Later")
     val personalityTraitOptions = listOf("Protective", "Jealous", "Clingy", "Rude", "Playful", "Funny", "Ambitious", "Kind", "Sweet", "Provider")
     val communicationCards = listOf(
@@ -3993,12 +4001,25 @@ private fun RoleplayDetails(
             )
         }
         adultRoleplaySelected -> {
+            val settingsContext = LocalContext.current
+            var openRouterKey by remember { mutableStateOf(settingsContext.prefString("openrouter_api_key", "")) }
+            var showAdultProviderSetup by remember { mutableStateOf(false) }
+            val providerName = if (bdsmIdentitySettings.adultProviderEndpoint.isBlank() || bdsmIdentitySettings.adultProviderEndpoint.contains("openrouter", ignoreCase = true)) {
+                "OpenRouter"
+            } else {
+                "Custom endpoint"
+            }
+            LaunchedEffect(adultRoleplaySelected, bdsmIdentitySettings.adultConsentConfirmed) {
+                if (adultRoleplaySelected && bdsmIdentitySettings.adultConsentConfirmed) {
+                    showAdultProviderSetup = true
+                }
+            }
             GlassCard(background = WarningPeach.copy(alpha = 0.18f), padding = 14.dp) {
                 Text("BDSM Mode Enabled", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Text("This companion can support adult consent-based fantasy roleplay through chat. Boundaries, roles, and safewords will be established before roleplay begins.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
             ToggleRow("I understand this mode is for consenting adults only.", bdsmIdentitySettings.adultConsentConfirmed, onBdsmConsentChange)
-                        ToggleRow("Allow anatomical words", bdsmIdentitySettings.anatomicalLanguageAllowed, onAnatomicalLanguageAllowedChange)
+            ToggleRow("Allow anatomical words", bdsmIdentitySettings.anatomicalLanguageAllowed, onAnatomicalLanguageAllowedChange)
             Text("Allows adult language preferences only when this adult mode is selected and consent is confirmed.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
             RoundedInputField(
                 value = bdsmIdentitySettings.preferredAdultPhrases,
@@ -4008,23 +4029,57 @@ private fun RoleplayDetails(
             )
             Text("Saved privately with this companion and sent only when adult language preferences are enabled.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
             HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
-            ToggleRow("Use self-hosted adult provider", bdsmIdentitySettings.adultProviderEnabled, onAdultProviderEnabledChange)
-            Text("Routes adult-mode messages to your own OpenAI-compatible Llama or DeepSeek endpoint after the local safety filter passes.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
-            RoundedInputField(
-                value = bdsmIdentitySettings.adultProviderEndpoint,
-                onValueChange = onAdultProviderEndpointChange,
-                label = "Self-hosted adult provider URL",
-                minLines = 1,
+            ToggleRow("Use adult AI provider", bdsmIdentitySettings.adultProviderEnabled) { enabled ->
+                onAdultProviderEnabledChange(enabled)
+                if (enabled) showAdultProviderSetup = true
+            }
+            Text(
+                "Routes adult-mode messages through the selected adult-compatible provider after the consent and safety gates pass.",
+                color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp,
             )
-            RoundedInputField(
-                value = bdsmIdentitySettings.adultProviderModel,
-                onValueChange = onAdultProviderModelChange,
-                label = "Model name",
-                minLines = 1,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SolidInputField(
+                    value = openRouterKey,
+                    onValueChange = { openRouterKey = it; settingsContext.savePref("openrouter_api_key", it) },
+                    label = "$providerName API key",
+                    placeholder = "sk-or-v1-...",
+                    modifier = Modifier.weight(1f),
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                SecondarySoftButton("Options", modifier = Modifier.width(112.dp), onClick = { showAdultProviderSetup = true })
+            }
+            MiniStateCard("Provider", providerName)
+            MiniStateCard("Model", bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL })
             MiniStateCard("Safety filter", "Blocks minors, non-consent, illegal content, and real harm before provider calls")
             MiniStateCard("Default stop word", bdsmIdentitySettings.defaultStopWord)
             MiniStateCard("Default pause word", bdsmIdentitySettings.defaultPauseWord)
+
+            if (showAdultProviderSetup) {
+                AdultProviderSetupDialog(
+                    providerName = providerName,
+                    openRouterKey = openRouterKey,
+                    onOpenRouterKeyChange = { key ->
+                        openRouterKey = key
+                        settingsContext.savePref("openrouter_api_key", key)
+                    },
+                    modelName = bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+                    onModelNameChange = onAdultProviderModelChange,
+                    customEndpoint = bdsmIdentitySettings.adultProviderEndpoint,
+                    onCustomEndpointChange = onAdultProviderEndpointChange,
+                    onProviderChoiceChange = { choice ->
+                        if (choice == "OpenRouter") {
+                            onAdultProviderEndpointChange("")
+                        } else if (bdsmIdentitySettings.adultProviderEndpoint.isBlank()) {
+                            onAdultProviderEndpointChange("https://")
+                        }
+                    },
+                    onDismiss = { showAdultProviderSetup = false },
+                )
+            }
         }
         else -> {
             Text("Supportive wellness guidance, grounding, reflection, and encouragement. This mode is for wellness support only and does not diagnose, treat, or replace professional care.", color = TextMuted, lineHeight = 20.sp)
@@ -4035,6 +4090,72 @@ private fun RoleplayDetails(
             )
         }
     }
+}
+
+@Composable
+private fun AdultProviderSetupDialog(
+    providerName: String,
+    openRouterKey: String,
+    onOpenRouterKeyChange: (String) -> Unit,
+    modelName: String,
+    onModelNameChange: (String) -> Unit,
+    customEndpoint: String,
+    onCustomEndpointChange: (String) -> Unit,
+    onProviderChoiceChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardDark,
+        title = { Text("Adult AI Provider", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "BDSM mode uses a separate adult-compatible provider after consent and safety checks. Leave the provider as OpenRouter unless you run your own OpenAI-compatible server.",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                SoftDropdown(
+                    label = "Provider",
+                    selected = providerName,
+                    options = listOf("OpenRouter", "Custom endpoint"),
+                    onSelected = onProviderChoiceChange,
+                )
+                SolidInputField(
+                    value = openRouterKey,
+                    onValueChange = onOpenRouterKeyChange,
+                    label = "OpenRouter API key",
+                    placeholder = "sk-or-v1-...",
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                SoftDropdown(
+                    label = "Adult AI model",
+                    selected = modelName,
+                    options = AdultRoleplayRepository.RECOMMENDED_MODELS,
+                    onSelected = onModelNameChange,
+                )
+                SolidInputField(
+                    value = customEndpoint,
+                    onValueChange = onCustomEndpointChange,
+                    label = "Custom endpoint",
+                    placeholder = "Leave blank for OpenRouter",
+                )
+                Text(
+                    "Custom endpoints are normalized automatically. If you type openrouter.ai or leave it blank, LunaKai uses the correct OpenRouter chat endpoint.",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done", color = DeepRose) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close", color = TextMuted) }
+        },
+    )
 }
 
 @Composable
@@ -4653,26 +4774,10 @@ private fun PreferencesScreen(
     var companionNotificationsEnabled by remember { mutableStateOf(context.prefBoolean("settings_companion_notifications_enabled", true)) }
     var notificationStyle by remember { mutableStateOf(context.prefString("settings_notification_style", "Calculated from character preferences")) }
     var notificationUrgency by remember { mutableStateOf(context.prefString("settings_notification_urgency", "Calculated from character preferences")) }
-    var wakeAssistantId by remember {
-        mutableStateOf(
-            context.prefString("voice_wake_assistant_id", wakeAssistantIdFor(companion))
-                .takeIf { it == "luna" || it == "kai" }
-                ?: wakeAssistantIdFor(companion),
-        )
-    }
-    fun wakeSettingKey(name: String) = "voice_wake_${wakeAssistantId}_$name"
-    val wakePhrase = wakePhraseFor(wakeAssistantId)
-    var wakePhraseEnabled by remember(wakeAssistantId) { mutableStateOf(context.prefBoolean(wakeSettingKey("wakePhraseEnabled"), false)) }
-    var wakeAudioSource by remember(wakeAssistantId) { mutableStateOf(context.prefString(wakeSettingKey("audioSource"), "Phone microphone only when selected")) }
     val accountEmail = currentFirebaseEmail() ?: "Not available"
-    val wakeAudioOptions = remember(context) { availableAudioInputSources(context) }
     var openSettingsSection by remember { mutableStateOf<String?>(null) }
     fun toggleSection(section: String) {
         openSettingsSection = if (openSettingsSection == section) null else section
-    }
-
-    LaunchedEffect(wakeAudioOptions) {
-        if (wakeAudioSource !in wakeAudioOptions) wakeAudioSource = wakeAudioOptions.first()
     }
 
     LaunchedEffect(
@@ -4693,9 +4798,6 @@ private fun PreferencesScreen(
         companionNotificationsEnabled,
         notificationStyle,
         notificationUrgency,
-        wakeAssistantId,
-        wakePhraseEnabled,
-        wakeAudioSource,
     ) {
         context.savePref("settings_voice_journal_enabled", voiceJournalEnabled)
         context.savePref("settings_memory_enabled", memoryEnabled)
@@ -4714,14 +4816,19 @@ private fun PreferencesScreen(
         context.savePref("settings_companion_notifications_enabled", companionNotificationsEnabled)
         context.savePref("settings_notification_style", notificationStyle)
         context.savePref("settings_notification_urgency", notificationUrgency)
-        context.savePref("voice_wake_assistant_id", wakeAssistantId)
-        context.savePref(wakeSettingKey("wakePhraseEnabled"), wakePhraseEnabled)
-        context.savePref(wakeSettingKey("audioSource"), wakeAudioSource)
     }
 
     GradientBackground {
         ScreenScroll {
-            SectionHeader("Settings", "Tap a category to view or change its options.")
+            Text("Tap a category to view or change its options.", color = TextMuted, fontSize = 15.sp)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                PrimaryGradientButton(
+                    "Voice & Live Settings",
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigate(AppRoute.VoiceLiveSettings) },
+                )
+            }
 
             SettingsAccordionSection(
                 title = "Account",
@@ -4889,30 +4996,6 @@ private fun PreferencesScreen(
                 )
                 Text("LUNAKAI uses these choices in the background with the active companion's traits, support focus, communication style, and character mode so notifications feel personal without showing the calculation here.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 SecondarySoftButton("Advanced Notification Settings", onClick = { onNavigate(AppRoute.NotificationSettings) })
-            }
-
-            SettingsAccordionSection(
-                title = "Voice Wake Phrase",
-                subtitle = "$wakePhrase - $wakeAudioSource",
-                expanded = openSettingsSection == "Voice Wake Phrase",
-                onToggle = { toggleSection("Voice Wake Phrase") },
-            ) {
-                SoftDropdown(
-                    label = "Wake assistant",
-                    selected = wakeAssistantName(wakeAssistantId),
-                    options = listOf("Luna", "Kai"),
-                    onSelected = { selected -> wakeAssistantId = selected.lowercase() },
-                )
-                ToggleRow("Enable $wakePhrase", wakePhraseEnabled) { wakePhraseEnabled = it }
-                MiniStateCard("Wake phrase", wakePhrase)
-                SoftDropdown(
-                    label = "Audio input source",
-                    selected = wakeAudioSource,
-                    options = wakeAudioOptions,
-                    onSelected = { wakeAudioSource = it },
-                )
-                Text("Only Luna and Kai can own wake phrases and Bluetooth wake routing. Custom companions keep their chat voice but do not register a wake phrase.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
-                SecondarySoftButton("Voice Controls", onClick = { onNavigate(AppRoute.VoiceLiveSettings) })
             }
 
             SettingsAccordionSection(
@@ -5365,6 +5448,58 @@ private fun VoiceLiveSettingsScreen(
         context.savePref(wakeSettingKey("voiceSensitivity"), voiceSensitivity)
     }
 
+    var voicePreviewReady by remember { mutableStateOf(false) }
+    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to hear a preview.") }
+    var voicePreviewEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+    DisposableEffect(context) {
+        var initializedEngine: TextToSpeech? = null
+        val engine = TextToSpeech(context) { status ->
+            voicePreviewReady = status == TextToSpeech.SUCCESS
+            if (status == TextToSpeech.SUCCESS) {
+                initializedEngine?.language = Locale.US
+                voicePreviewStatus = "Voice preview is ready."
+            } else {
+                voicePreviewStatus = "Voice preview is not available on this device yet."
+            }
+        }
+        initializedEngine = engine
+        voicePreviewEngine = engine
+        onDispose {
+            engine.stop()
+            engine.shutdown()
+            voicePreviewEngine = null
+        }
+    }
+    fun playVoicePreview(voiceName: String) {
+        val engine = voicePreviewEngine
+        if (!voicePreviewReady || engine == null) {
+            voicePreviewStatus = "Voice preview is still loading. Try again in a moment."
+            return
+        }
+        engine.language = Locale.US
+        val installedVoice = bestInstalledVoiceForPreview(engine, voiceName)
+        if (installedVoice == null && isMaleVoiceOption(voiceName)) {
+            voicePreviewStatus = "No installed male Text-to-Speech voice was found on this phone. Install a male voice in Android Text-to-speech settings, then try again."
+            return
+        }
+        if (installedVoice != null) {
+            engine.voice = installedVoice
+        }
+        engine.setPitch(voicePreviewPitch(voiceName))
+        engine.setSpeechRate(voicePreviewRate(voiceName))
+        voicePreviewStatus = if (installedVoice != null) {
+            "Playing $voiceName with installed voice: ${installedVoice.name}."
+        } else {
+            "Playing $voiceName preview."
+        }
+        engine.speak(
+            voicePreviewSample(companion.name, voiceName),
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "voice_preview_${voiceName.filter { it.isLetterOrDigit() }}",
+        )
+    }
+
     GradientBackground {
         ScreenScroll {
             SectionHeader("Voice controls", "Choose companion voice, wake phrase, audio source, and voice training.")
@@ -5378,12 +5513,22 @@ private fun VoiceLiveSettingsScreen(
                         companions.firstOrNull { it.name == selectedName }?.let { onSelectCompanion(it.id) }
                     },
                 )
-                SoftDropdown(
-                    label = "${companion.name}'s voice",
-                    selected = companion.voice,
+                Text("${companion.name}'s voice", color = TextMuted, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                VoicePreviewList(
                     options = voiceOptions,
+                    selected = companion.voice,
                     onSelected = onVoiceSelected,
+                    onPreview = { playVoicePreview(it) },
                 )
+                Text(voicePreviewStatus, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                if (companion.gender == "Male") {
+                    Text(
+                        "Male previews use a real installed male Text-to-Speech voice when the phone provides one. If none is installed, the app will not play a female voice as a male preview.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                    )
+                }
                 SoftDropdown(
                     label = "Voice speed",
                     selected = voiceSpeed,
@@ -5446,12 +5591,6 @@ private fun VoiceLiveSettingsScreen(
                     options = listOf("Answer with voice and text", "Answer with voice only", "Answer with text only"),
                     onSelected = { answerStyle = it },
                 )
-            }
-            GlassCard {
-                Text("Video Chat settings", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("Avatar type: ${companion.avatarType}", color = TextMuted)
-                SecondarySoftButton("Open Video Chat", onClick = onLiveSettings)
-                Text("Video Chat shows the companion visual and routes one active voice session at a time. Full photo-to-talking-avatar animation can be connected later.", color = TextMuted)
             }
         }
     }
@@ -6048,21 +6187,68 @@ private fun RoundedInputField(value: String, onValueChange: (String) -> Unit, la
 }
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start) {
-        val bubbleModifier = Modifier.fillMaxWidth(0.82f)
+private fun SolidInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String = "",
+    modifier: Modifier = Modifier,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = if (placeholder.isBlank()) null else ({ Text(placeholder) }),
+        modifier = modifier.fillMaxWidth(),
+        shape = MediumShape,
+        singleLine = true,
+        visualTransformation = visualTransformation,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = TextPrimary,
+            unfocusedTextColor = TextPrimary,
+            focusedLabelColor = AccentPink,
+            unfocusedLabelColor = TextMuted,
+            focusedPlaceholderColor = TextMuted,
+            unfocusedPlaceholderColor = TextMuted,
+            cursorColor = AccentPink,
+            focusedBorderColor = Color.Transparent,
+            unfocusedBorderColor = Color.Transparent,
+            focusedContainerColor = CardAccent.copy(alpha = 0.96f),
+            unfocusedContainerColor = CardAccent.copy(alpha = 0.90f),
+        ),
+    )
+}
+
+@Composable
+private fun ChatBubble(message: ChatMessage, centeredWide: Boolean = false) {
+    val arrangement = when {
+        centeredWide -> Arrangement.Center
+        message.isUser -> Arrangement.End
+        else -> Arrangement.Start
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrangement) {
+        val bubbleModifier = Modifier.fillMaxWidth(if (centeredWide) 0.94f else 0.82f)
         if (message.isUser) {
             Box(
                 modifier = bubbleModifier
-                    .clip(RoundedCornerShape(24.dp, 24.dp, 6.dp, 24.dp))
+                    .clip(if (centeredWide) PillShape else RoundedCornerShape(24.dp, 24.dp, 6.dp, 24.dp))
                     .background(Brush.horizontalGradient(listOf(DeepRose, Lavender)))
                     .padding(16.dp),
             ) {
-                Text(message.text, color = Color.White, fontSize = 15.sp)
+                Text(message.text, color = Color.White, fontSize = 15.sp, textAlign = if (centeredWide) TextAlign.Center else TextAlign.Start, modifier = Modifier.fillMaxWidth())
             }
         } else {
-            GlassCard(modifier = bubbleModifier, padding = 16.dp) {
-                Text(message.text, color = TextDark, fontSize = 15.sp)
+            val appearance = LocalAppAppearance.current
+            Box(
+                modifier = bubbleModifier
+                    .clip(if (centeredWide) PillShape else LargeShape)
+                    .background(appearance.card)
+                    .border(1.dp, appearance.border, if (centeredWide) PillShape else LargeShape)
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(message.text, color = TextDark, fontSize = 15.sp, textAlign = if (centeredWide) TextAlign.Center else TextAlign.Start, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -6431,6 +6617,43 @@ private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, color = TextDark, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun VoicePreviewList(
+    options: List<String>,
+    selected: String,
+    onSelected: (String) -> Unit,
+    onPreview: (String) -> Unit,
+) {
+    val appearance = LocalAppAppearance.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            val isSelected = selected == option
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MediumShape)
+                    .background(if (isSelected) appearance.accentMiddle.copy(alpha = 0.30f) else appearance.control.copy(alpha = 0.78f))
+                    .border(1.dp, if (isSelected) appearance.accentStart.copy(alpha = 0.72f) else appearance.border, MediumShape)
+                    .clickable { onSelected(option) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(option, color = appearance.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (isSelected) "Selected - ${voicePreviewDescription(option)}" else voicePreviewDescription(option),
+                        color = appearance.mutedText,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                    )
+                }
+                SecondarySoftButton("Play", modifier = Modifier.width(86.dp), onClick = { onPreview(option) })
+            }
+        }
     }
 }
 

@@ -27,7 +27,8 @@ data class GeminiCompanionContext(
     val adultPhrasePreferences: String = "",
     val adultProviderEnabled: Boolean = false,
     val adultProviderEndpoint: String = "",
-    val adultProviderModel: String = "llama-3.1-8b-instruct",
+    val adultProviderModel: String = "gryphe/mythomax-l2-13b",
+    val openRouterApiKey: String = "",
 )
 
 sealed interface GeminiCompanionState {

@@ -7,6 +7,8 @@ import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.PublicPreviewAPI
 import com.google.firebase.ai.type.ResponseModality
+import com.google.firebase.ai.type.SpeechConfig
+import com.google.firebase.ai.type.Voice
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.liveGenerationConfig
 import kotlinx.coroutines.CoroutineScope
@@ -51,10 +53,12 @@ class GeminiLiveCompanionRepository(
     ): GeminiLiveSessionState = withContext(Dispatchers.IO) {
         runCatching {
             stopSharedAudioConversation()
+            val voiceName = geminiVoiceNameFor(companion.gender, companion.voice)
             val liveModel = Firebase.ai(backend = GenerativeBackend.googleAI()).liveModel(
                 modelName = modelName,
                 generationConfig = liveGenerationConfig {
                     responseModality = ResponseModality.AUDIO
+                    speechConfig = SpeechConfig(Voice(voiceName))
                 },
                 systemInstruction = content {
                     text(liveSystemInstruction(companion, modeLabel))
@@ -81,6 +85,41 @@ class GeminiLiveCompanionRepository(
     }
 
     fun isConnected(): Boolean = sharedSession?.isClosed() == false
+
+    private fun geminiVoiceNameFor(gender: String, voiceLabel: String): String {
+        val isMale = gender.equals("Male", ignoreCase = true) ||
+            voiceLabel.contains("Male", ignoreCase = true)
+        val isFemale = gender.equals("Female", ignoreCase = true) ||
+            voiceLabel.contains("Female", ignoreCase = true) ||
+            voiceLabel.contains("Feminine", ignoreCase = true)
+        return when {
+            isMale -> when (voiceLabel) {
+                "Deep Male" -> "Orus"
+                "Velvet Male" -> "Orus"
+                "Low Velvet Male" -> "Orus"
+                "Silky Soft Male" -> "Puck"
+                "Warm Whisper Male" -> "Puck"
+                "Protective Male" -> "Charon"
+                "Calm Male" -> "Fenrir"
+                "Motivational Male" -> "Puck"
+                "Smooth Male" -> "Puck"
+                "Warm Male" -> "Fenrir"
+                "Soft-Spoken Male" -> "Puck"
+                else -> "Puck"
+            }
+            isFemale -> when (voiceLabel) {
+                "Soft Female" -> "Kore"
+                "Warm Female" -> "Aoede"
+                "Confident Female" -> "Zephyr"
+                "Sultry Calm Female" -> "Leda"
+                "Bright Female" -> "Zephyr"
+                "Deep Feminine" -> "Leda"
+                "Gentle Whisper Female" -> "Kore"
+                else -> "Aoede"
+            }
+            else -> "Aoede"
+        }
+    }
 
     private fun liveSystemInstruction(companion: GeminiCompanionContext, modeLabel: String): String = """
         You are ${companion.companionName}, the live voice companion inside LUNAKAI Wellness Companion.

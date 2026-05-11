@@ -550,7 +550,7 @@ private fun defaultCompanions() = listOf(
         id = "kai",
         name = "Kai",
         gender = "Male",
-        voice = "Calm Male",
+        voice = "Deep Smooth Male",
         personalityTags = listOf("Calm", "Protective", "Honest", "Grounded"),
         personalityTraits = listOf("Protective", "Ambitious", "Kind"),
         communicationStyle = "Direct",
@@ -1775,17 +1775,15 @@ private fun femaleVoiceOptions() = listOf(
 )
 
 private fun maleVoiceOptions() = listOf(
-    "Calm Male",
-    "Deep Male",
-    "Velvet Male",
+    "Deep Smooth Male",
     "Low Velvet Male",
     "Silky Soft Male",
     "Warm Whisper Male",
-    "Protective Male",
-    "Smooth Male",
-    "Warm Male",
-    "Motivational Male",
-    "Soft-Spoken Male",
+    "Sultry Calm Male",
+    "Midnight Male",
+    "Soft Romance Male",
+    "Protective Warm Male",
+    "Smooth Low Male",
 )
 
 private fun neutralVoiceOptions() = listOf("Neutral Calm", "Neutral Bright", "Custom Voice Later")
@@ -1804,6 +1802,15 @@ private fun voiceForGender(gender: String, currentVoice: String): String {
 private fun isMaleVoiceOption(voiceName: String): Boolean = voiceName in maleVoiceOptions()
 
 private fun voicePreviewPitch(voiceName: String): Float = when {
+    voiceName.equals("Midnight Male", ignoreCase = true) -> 0.54f
+    voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.55f
+    voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.57f
+    voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.58f
+    voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.60f
+    voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.61f
+    voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.63f
+    voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.64f
+    voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.66f
     voiceName.contains("Deep", ignoreCase = true) -> 0.62f
     voiceName.contains("Low", ignoreCase = true) -> 0.66f
     voiceName.contains("Velvet", ignoreCase = true) -> 0.68f
@@ -1815,6 +1822,15 @@ private fun voicePreviewPitch(voiceName: String): Float = when {
 }
 
 private fun voicePreviewRate(voiceName: String): Float = when {
+    voiceName.equals("Midnight Male", ignoreCase = true) -> 0.74f
+    voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.76f
+    voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.78f
+    voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.80f
+    voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.82f
+    voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.82f
+    voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.84f
+    voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.86f
+    voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.88f
     voiceName.contains("Motivational", ignoreCase = true) -> 1.05f
     voiceName.contains("Velvet", ignoreCase = true) || voiceName.contains("Silky", ignoreCase = true) -> 0.84f
     voiceName.contains("Whisper", ignoreCase = true) -> 0.82f
@@ -1823,13 +1839,26 @@ private fun voicePreviewRate(voiceName: String): Float = when {
 }
 
 private fun voicePreviewDescription(voiceName: String): String {
+    val maleDescription = when {
+        voiceName.equals("Deep Smooth Male", ignoreCase = true) -> "Low, smooth, relaxed"
+        voiceName.equals("Low Velvet Male", ignoreCase = true) -> "Deep, slow, velvet"
+        voiceName.equals("Silky Soft Male", ignoreCase = true) -> "Soft, silky, intimate"
+        voiceName.equals("Warm Whisper Male", ignoreCase = true) -> "Warm, quiet, close"
+        voiceName.equals("Sultry Calm Male", ignoreCase = true) -> "Calm, low, sultry"
+        voiceName.equals("Midnight Male", ignoreCase = true) -> "Dark, slow, smooth"
+        voiceName.equals("Soft Romance Male", ignoreCase = true) -> "Gentle, warm, romantic"
+        voiceName.equals("Protective Warm Male", ignoreCase = true) -> "Steady, warm, reassuring"
+        voiceName.equals("Smooth Low Male", ignoreCase = true) -> "Smooth, low, easy"
+        else -> null
+    }
+    if (maleDescription != null) return maleDescription
     val voiceGroup = if (isMaleVoiceOption(voiceName)) "Male voice preview" else "Female voice preview"
     return "$voiceGroup - ${voiceName.removeSuffix(" Male").removeSuffix(" Female")}"
 }
 
-private fun voicePreviewSample(companionName: String, voiceName: String): String {
+private fun voicePreviewSample(companionName: String): String {
     val introName = companionName.ifBlank { "your companion" }
-    return "Hi, I'm $introName. This is the $voiceName preview. I can speak with this tone when voice replies are connected."
+    return "Hey, I'm $introName."
 }
 
 private fun installedEnglishVoices(engine: TextToSpeech): List<Voice> {
@@ -1870,13 +1899,24 @@ private fun bestInstalledVoiceForPreview(engine: TextToSpeech, voiceName: String
         if (wantsMale) isInstalledMaleVoice(voice) else isInstalledFemaleVoice(voice)
     }
     if (genderedMatches.isNotEmpty()) {
-        return genderedMatches.first()
+        return genderedMatches[voiceOptionBucket(voiceName, genderedMatches.size)]
     }
     return if (wantsMale) {
-        englishVoices.firstOrNull { !isInstalledFemaleVoice(it) } ?: englishVoices.first()
+        val masculineOrNeutral = englishVoices.filterNot { isInstalledFemaleVoice(it) }
+        masculineOrNeutral.getOrNull(voiceOptionBucket(voiceName, masculineOrNeutral.size))
     } else {
-        englishVoices.firstOrNull { !isInstalledMaleVoice(it) } ?: englishVoices.first()
+        val feminineOrNeutral = englishVoices.filterNot { isInstalledMaleVoice(it) }
+        feminineOrNeutral.getOrNull(voiceOptionBucket(voiceName, feminineOrNeutral.size)) ?: englishVoices.first()
     }
+}
+
+private fun voiceOptionBucket(voiceName: String, size: Int): Int {
+    if (size <= 1) return 0
+    val maleIndex = maleVoiceOptions().indexOf(voiceName)
+    if (maleIndex >= 0) return maleIndex % size
+    val femaleIndex = femaleVoiceOptions().indexOf(voiceName)
+    if (femaleIndex >= 0) return femaleIndex % size
+    return (voiceName.hashCode() and Int.MAX_VALUE) % size
 }
 
 private fun wakeAssistantIdFor(companion: CompanionProfile): String {
@@ -5523,7 +5563,7 @@ private fun VoiceLiveSettingsScreen(
         engine.setSpeechRate(voicePreviewRate(voiceName))
         voicePreviewStatus = "Playing $voiceName preview."
         engine.speak(
-            voicePreviewSample(companion.name, voiceName),
+            voicePreviewSample(companion.name),
             TextToSpeech.QUEUE_FLUSH,
             null,
             "voice_preview_${voiceName.filter { it.isLetterOrDigit() }}",

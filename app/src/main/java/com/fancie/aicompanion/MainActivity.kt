@@ -2,8 +2,11 @@ package com.fancie.aicompanion
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentValues
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -39,6 +42,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -88,6 +92,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -103,8 +108,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -253,18 +261,19 @@ class MainActivity : ComponentActivity() {
 
     private fun createFancieNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val soundUri = Uri.parse("android.resource://$packageName/${R.raw.fancie_notification}")
+            val soundChoice = prefString("settings_notification_sound", "LunaKai soft chime")
+            val soundUri = notificationUriForChoice(this, soundChoice, prefString("settings_notification_sound_uri", ""))
             val attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
             val channel = NotificationChannel(
                 "fancie_gentle_support",
-                "LUNAKAI gentle support",
+                "LunaKai gentle support",
                 NotificationManager.IMPORTANCE_DEFAULT,
             ).apply {
                 description = "Soft, premium companion prompts and wellness reminders."
-                setSound(soundUri, attributes)
+                if (soundUri == null) setSound(null, null) else setSound(soundUri, attributes)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
@@ -272,7 +281,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppRoute(val title: String, val subtitle: String) {
-    Splash("LUNAKAI Wellness Companion", "Preparing your companion..."),
+    Splash("LunaKai Wellness Companion", "Preparing your companion..."),
     Welcome("Welcome", "Meet the companion that grows with you."),
     Login("Sign In", "Your companion space is waiting for you."),
     Home("Home", ""),
@@ -282,8 +291,9 @@ private enum class AppRoute(val title: String, val subtitle: String) {
     LiveCompanion("Live Companion", "Talk, listen, or open a live companion call."),
     LiveCompanionCall("Live Companion Call", "Talk, text, or sit with your companion in real time."),
     CompanionState("Companion State", "See your companion's current support mode."),
+    ActiveCompanionSettings("Companion Settings", "Update the active companion's voice, personality, and interactive features."),
     Companions("My Companions", "Manage your saved companions and choose who is active."),
-    Personality("Companion Builder", "Shape identity, voice, look, and support style."),
+    Personality("Companion Builder", "Create a new companion."),
     Journal("Journal", "A private space to release, reflect, and remember."),
     SavedJournalEntries("Journal Entries", "Review saved written, voice, and video entries."),
     Reflection("Reflection", "Understand what your feelings are trying to show you."),
@@ -297,7 +307,7 @@ private enum class AppRoute(val title: String, val subtitle: String) {
     Preferences("Settings", "Manage your companion, privacy, storage, and support settings."),
     ProfileInfo("Profile Info", "Manage your profile photo and personal details."),
     AccountSettings("Account Settings", "Manage sign-in, account access, and sign out."),
-    VoiceLiveSettings("Voice & Live Settings", "Choose voice, microphone, speaker, and wake phrase options."),
+    VoiceLiveSettings("Voice & Chat Settings", "Choose voice, microphone, speaker, chat storage, and memory options."),
     JournalStorageSettings("Journal Storage", "Choose where entries are saved."),
     PrivacySettings("Privacy Settings", "Control app lock, sync, previews, and data export."),
     NotificationSettings("Notifications", "Choose reminders, check-ins, and gentle prompts."),
@@ -307,18 +317,25 @@ private enum class AppRoute(val title: String, val subtitle: String) {
     FemaleAvatars("Female Avatars", "Choose Luna, Amara, Nova, or Selene."),
     MaleAvatars("Male Avatars", "Choose Kai, Atlas, Rome, or Saint."),
     CustomizeCompanion("Customize Companion", "Build a companion with your own style, energy, and personality."),
+    AdminSettings("Admin Settings", "Provider controls and admin-only app diagnostics."),
 }
 
 private enum class JournalStorage(val label: String, val body: String) {
-    Device("Device only", "Stored locally only. Not synced across devices."),
-    Cloud("Cloud only", "Stored in Firestore under your account."),
-    Both("Device + Cloud", "Stored locally and in Firestore."),
+    Device("User device", "Stored on this device only."),
+    GoogleDrive("Google Drive", "Stored in the user's connected Google Drive when enabled."),
+    OneNote("OneNote", "Stored in the user's connected OneNote notebook when enabled."),
+    CompatibleCloud("Compatible cloud storage", "Stored in another compatible cloud storage provider when enabled."),
+    Cloud("LunaKai cloud", "Stored in the user's private LunaKai cloud account."),
+    Both("Device + LunaKai cloud", "Stored on this device and in LunaKai cloud."),
 }
 
 private enum class ChatStorage(val label: String, val body: String) {
-    Device("User device only", "Messages stay on this phone only."),
-    Cloud("Personal storage only", "Messages save only under your signed-in user storage."),
-    Both("Device + personal storage", "Messages save on this phone and under your signed-in user storage."),
+    Device("User device", "Messages stay on this device only."),
+    GoogleDrive("Google Drive", "Messages save to the user's connected Google Drive when enabled."),
+    OneNote("OneNote", "Messages save to the user's connected OneNote notebook when enabled."),
+    CompatibleCloud("Compatible cloud storage", "Messages save to another compatible cloud provider when enabled."),
+    Cloud("LunaKai cloud", "Messages save under the signed-in LunaKai account."),
+    Both("Device + LunaKai cloud", "Messages save on this device and under the signed-in LunaKai account."),
 }
 
 private enum class JournalEntryType(val label: String) {
@@ -374,7 +391,7 @@ private data class BdsmSessionState(
 
 private fun CompanionProfile.activeRoleplayStyles(): List<String> = roleplayStyles.ifEmpty { listOf(roleplayStyle) }
 
-private fun CompanionProfile.isAdultRoleplaySelected(): Boolean = "BDSM" in activeRoleplayStyles()
+private fun CompanionProfile.isAdultRoleplaySelected(): Boolean = activeRoleplayStyles().any { it == "RolePlay" || it == "BDSM" }
 
 private fun CompanionProfile.isAdultRoleplayEnabled(): Boolean =
     isAdultRoleplaySelected() && bdsmIdentitySettings.enabled && bdsmIdentitySettings.adultConsentConfirmed
@@ -522,7 +539,167 @@ private fun Context.prefBoolean(key: String, default: Boolean = false) = lunakai
 private fun Context.prefInt(key: String, default: Int = 0) = lunakaiPrefs().getInt(key, default)
 private fun Context.savePref(key: String, value: String) = lunakaiPrefs().edit().putString(key, value).apply()
 private fun Context.savePref(key: String, value: Boolean) = lunakaiPrefs().edit().putBoolean(key, value).apply()
+
+private fun Context.adminEmoIntelPrompt(): String {
+    val traitNames = listOf(
+        "Affectionate", "Playful", "Direct", "Romantic", "Dominant", "Submissive",
+        "Nurturing", "Protective", "Philosophical", "Flirty", "Funny", "Calm",
+        "Motivational", "Spiritual", "Sensual", "Intense"
+    )
+    return traitNames.joinToString("\n") { trait ->
+        val value = prefString("admin_trait_$trait", "50").toIntOrNull()?.coerceIn(0, 100) ?: 50
+        "- $trait: $value/100"
+    }
+}
 private fun Context.savePref(key: String, value: Int) = lunakaiPrefs().edit().putInt(key, value).apply()
+
+private const val ADMIN_EMAIL = "fanciemusicllc@gmail.com"
+private const val ADMIN_PIN = "083380"
+private const val LUNAKAI_LOCAL_ENDPOINT = "http://192.168.1.114:11434/api/generate"
+private const val LUNAKAI_LOCAL_MODEL = "lunakai-ai-adult"
+private const val LUNAKAI_ADULT_MODEL = "lunakai-ai-adult"
+
+private fun providerNameFromEndpoint(endpoint: String): String = when {
+    endpoint.contains("11434", ignoreCase = true) ||
+        endpoint.contains("localhost", ignoreCase = true) ||
+        endpoint.contains("192.168.", ignoreCase = true) -> "LunaKai Adult"
+    endpoint.contains("deepseek", ignoreCase = true) -> "DeepSeek"
+    endpoint.isBlank() || endpoint.contains("openrouter", ignoreCase = true) -> "OpenRouter"
+    endpoint.equals("gemini", ignoreCase = true) -> "Gemini"
+    else -> "Custom endpoint"
+}
+
+private fun endpointForProvider(provider: String, currentCustom: String = ""): String = when (provider) {
+    "LunaKai Adult", "LunaKai AI" -> LUNAKAI_LOCAL_ENDPOINT
+    "DeepSeek" -> AdultRoleplayRepository.DEEPSEEK_ENDPOINT
+    "Gemini" -> "gemini"
+    "Custom endpoint" -> currentCustom.ifBlank { "https://" }
+    else -> ""
+}
+
+private fun modelForProvider(provider: String): String = when (provider) {
+    "LunaKai Adult", "LunaKai AI" -> LUNAKAI_LOCAL_MODEL
+    "DeepSeek" -> AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL
+    "Gemini" -> "gemini-2.5-flash"
+    else -> AdultRoleplayRepository.DEFAULT_ADULT_MODEL
+}
+
+private val DEFAULT_ADMIN_PROVIDER_OPTIONS = listOf("LunaKai Adult", "Gemini", "OpenRouter", "DeepSeek", "Custom endpoint")
+
+private fun parseProviderOptions(raw: String): List<String> =
+    raw.split("|")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .take(10)
+
+private fun Context.adminProviderOptions(): List<String> =
+    parseProviderOptions(prefString("admin_providers", "")).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
+
+private fun Context.saveAdminProviderOptions(options: List<String>) {
+    val protectedOptions = (listOf("LunaKai Adult") + options).distinct().take(10)
+    savePref("admin_providers", protectedOptions.joinToString("|"))
+}
+
+private const val DEFAULT_CALL_ANSWER_PHRASES = "Hello\nHey there\nHey Babe\nI'm here with you"
+private val CALL_RINGTONE_OPTIONS = listOf("Phone ringtone", "Device ringtone", "Choose from device", "LunaKai soft chime", "Notification chime", "Alarm tone", "Silent")
+private val NOTIFICATION_SOUND_OPTIONS = listOf("LunaKai soft chime", "Bright chime", "Calm chime", "Device notification", "Choose from device", "Silent")
+private val CALL_URGENCY_OPTIONS = listOf("Match companion traits", "Soft and patient", "Normal ring", "Persistent", "High urgency")
+
+private fun voiceSettingKey(companionId: String, name: String) = "voice_${companionId}_$name"
+
+private fun ringtoneUriForChoice(context: Context, choice: String, customUri: String = ""): Uri? = when (choice) {
+    "Silent" -> null
+    "Device ringtone", "Choose from device" -> customUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+    "LunaKai soft chime" -> Uri.parse("android.resource://${context.packageName}/${R.raw.fancie_notification}")
+    "Notification chime" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    "Alarm tone" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+    else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+}
+
+private fun notificationUriForChoice(context: Context, choice: String, customUri: String = ""): Uri? = when (choice) {
+    "Silent" -> null
+    "Device notification", "Choose from device" -> customUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    "Bright chime" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+    "Calm chime" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    else -> Uri.parse("android.resource://${context.packageName}/${R.raw.fancie_notification}")
+}
+
+private fun startCallRingPlayer(context: Context, choice: String, customUri: String = ""): MediaPlayer? {
+    if (choice == "Silent") return null
+    val primaryUri = ringtoneUriForChoice(context, choice, customUri)
+    return primaryUri
+        ?.let { createPreparedRingPlayer(context, it) }
+        ?: createPreparedRingPlayer(context, Uri.parse("android.resource://${context.packageName}/${R.raw.fancie_notification}"))
+}
+
+private fun createPreparedRingPlayer(context: Context, uri: Uri): MediaPlayer? = runCatching {
+    MediaPlayer().apply {
+        setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build(),
+        )
+        setDataSource(context, uri)
+        isLooping = true
+        setVolume(1f, 1f)
+        prepare()
+        start()
+    }
+}.getOrElse { error ->
+    Log.w("LunaKaiCallRing", "Could not play call ring from $uri", error)
+    null
+}
+
+private fun stopCallRingPlayer(player: MediaPlayer?) {
+    if (player == null) return
+    runCatching { if (player.isPlaying) player.stop() }
+    runCatching { player.release() }
+}
+
+private fun selectedCallAnswerPhrase(rawPhrases: String, companionName: String): String {
+    val phrases = rawPhrases
+        .lineSequence()
+        .flatMap { it.split(",", "|").asSequence() }
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toList()
+        .ifEmpty { DEFAULT_CALL_ANSWER_PHRASES.lineSequence().toList() }
+    val index = ((System.currentTimeMillis() / 1000L) % phrases.size).toInt()
+    return phrases[index]
+        .replace("{name}", companionName)
+        .take(120)
+}
+
+private fun callRingDurationMillis(urgency: String, companion: CompanionProfile): Long = when (urgency) {
+    "Soft and patient" -> 2800L
+    "Normal ring" -> 2200L
+    "Persistent" -> 3400L
+    "High urgency" -> 4200L
+    else -> when (companionTraitUrgency(companion)) {
+        "Soft" -> 1800L
+        "High" -> 3400L
+        else -> 2400L
+    }
+}
+
+private fun companionTraitUrgency(companion: CompanionProfile): String {
+    val profileText = (companion.personalityTraits + companion.personalityTags + companion.communicationStyles +
+        listOf(companion.communicationStyle, companion.characterMode, companion.relationshipDynamicTone))
+        .joinToString(" ")
+        .lowercase(Locale.US)
+    return when {
+        listOf("urgent", "direct", "dominant", "protective", "intense", "motivational").any { it in profileText } -> "High"
+        listOf("soft", "gentle", "calm", "soothing", "patient").any { it in profileText } -> "Soft"
+        else -> "Balanced"
+    }
+}
+
+private fun callUrgencyLabel(urgency: String, companion: CompanionProfile): String =
+    if (urgency == "Match companion traits") "Matched: ${companionTraitUrgency(companion)}" else urgency
 
 private fun defaultCompanions() = listOf(
     CompanionProfile(
@@ -573,17 +750,18 @@ private fun newCompanionDraft(base: CompanionProfile): CompanionProfile {
     return base.copy(
         id = "draft-${System.currentTimeMillis()}",
         name = "",
-        gender = "No preference",
-        voice = "Neutral Calm",
+        gender = "",
+        voice = "",
         personalityTags = emptyList(),
         personalityTraits = emptyList(),
-        communicationStyle = "Gentle",
+        communicationStyle = "",
         communicationStyles = emptyList(),
         supportFocus = emptySet(),
         shortDescription = "",
-        roleplayStyle = "Wellness Coach",
-        roleplayStyles = listOf("Wellness Coach"),
-        characterMode = "Best Friend",
+        roleplayEnabled = false,
+        roleplayStyle = "",
+        roleplayStyles = emptyList(),
+        characterMode = "",
         photoUri = null,
         photoStoragePath = null,
         avatarType = "Glowing Orb",
@@ -993,6 +1171,7 @@ private fun FancieApp() {
     val topLevelRoutes = setOf(
         AppRoute.Chat,
         AppRoute.CompanionState,
+        AppRoute.ActiveCompanionSettings,
         AppRoute.Companions,
         AppRoute.CrisisResources,
         AppRoute.Disclaimer,
@@ -1166,6 +1345,11 @@ private fun FancieApp() {
                     companion = activeCompanion,
                     onNavigate = { navigateTo(it) },
                 )
+                AppRoute.ActiveCompanionSettings -> ActiveCompanionSettingsScreen(
+                    companion = activeCompanion,
+                    onCompanionChange = { updateCompanion(it) },
+                    onBack = { goBack(AppRoute.CompanionState) },
+                )
                 AppRoute.Companions -> MyCompanionsScreen(
                     companions = companions,
                     activeCompanionId = activeCompanionId,
@@ -1174,7 +1358,7 @@ private fun FancieApp() {
                     onEdit = { id ->
                         companionBuilderDraft = null
                         setActiveCompanion(id)
-                        navigateTo(AppRoute.Personality)
+                        navigateTo(AppRoute.ActiveCompanionSettings)
                     },
                     onChat = {
                         setActiveCompanion(it)
@@ -1191,10 +1375,14 @@ private fun FancieApp() {
                         }
                     },
                 )
-                AppRoute.Personality -> PersonalityBuilderScreen(
-                    companion = companionBuilderDraft ?: activeCompanion,
-                    isCreatingNew = companionBuilderDraft != null,
-                    onCompanionChange = { changed -> updateCompanion(changed) },
+                AppRoute.Personality -> {
+                    if (companionBuilderDraft == null) {
+                        companionBuilderDraft = newCompanionDraft(activeCompanion)
+                    }
+                    PersonalityBuilderScreen(
+                        companion = companionBuilderDraft ?: newCompanionDraft(activeCompanion),
+                        isCreatingNew = true,
+                        onCompanionChange = { changed -> companionBuilderDraft = changed },
                     onSave = {
                         companionBuilderDraft?.let { draft ->
                             val newCompanion = draft.copy(
@@ -1212,10 +1400,11 @@ private fun FancieApp() {
                         }
                         navigateTo(AppRoute.Companions)
                     },
-                    onOpenFemaleAvatars = { navigateTo(AppRoute.FemaleAvatars) },
-                    onOpenMaleAvatars = { navigateTo(AppRoute.MaleAvatars) },
-                    onCustomizeCompanion = { navigateTo(AppRoute.CustomizeCompanion) },
-                )
+                        onOpenFemaleAvatars = { navigateTo(AppRoute.FemaleAvatars) },
+                        onOpenMaleAvatars = { navigateTo(AppRoute.MaleAvatars) },
+                        onCustomizeCompanion = { navigateTo(AppRoute.CustomizeCompanion) },
+                    )
+                }
                 AppRoute.CustomizeCompanion -> CustomizeCompanionScreen(
                     baseCompanion = activeCompanion,
                     onCancel = { goBack(AppRoute.Personality) },
@@ -1314,15 +1503,11 @@ private fun FancieApp() {
                         fitnessTimerRunning = false
                     },
                     onStartActive = { fitnessTimerRunning = true },
+                    onPauseActive = { fitnessTimerRunning = false },
                     onAddFiveMinutes = { fitnessMinutesToday += 5 },
                     onReset = {
                         fitnessTimerRunning = false
                         fitnessSessionSeconds = 0
-                        fitnessMinutesToday = 0
-                        fitnessWorkoutsCompleted = 0
-                        fitnessStreakDays = 0
-                        fitnessTotalSeconds = 0
-                        fitnessLastWorkoutTitle = "No workout completed yet"
                     },
                     onCompleteWorkout = { plannedMinutes ->
                         fitnessTimerRunning = false
@@ -1362,6 +1547,7 @@ private fun FancieApp() {
                     onAskEveryTimeChange = { askStorageEveryTime = it },
                     onHideDisclaimerChange = { hideDisclaimerOnLaunch = it },
                     onShowDisclaimerChange = { showDisclaimerOnLaunch = it },
+                    onCompanionChange = { updateCompanion(it) },
                     onNavigate = { navigateTo(it) },
                     onProfileInfo = { navigateTo(AppRoute.ProfileInfo) },
                     onSignOut = { signOutAndReturnToLogin() },
@@ -1390,8 +1576,9 @@ private fun FancieApp() {
                     onNotificationPreferencesChange = { notificationPreferences = it },
                     onCloudSyncPreferenceChange = { cloudSyncPreference = it },
                     onSave = { goBack(AppRoute.Preferences) },
+                    onAdminClick = { navigateTo(AppRoute.AdminSettings) },
                 )
-                AppRoute.AccountSettings -> AccountSettingsScreen(onSignOut = { signOutAndReturnToLogin() })
+                AppRoute.AccountSettings -> AccountSettingsScreen(onSignOut = { signOutAndReturnToLogin() }, onAdminClick = { navigateTo(AppRoute.AdminSettings) })
                 AppRoute.VoiceLiveSettings -> VoiceLiveSettingsScreen(
                     companion = activeCompanion,
                     companions = companions,
@@ -1419,6 +1606,7 @@ private fun FancieApp() {
                         appearancePalette = savedPalette
                     },
                 )
+                AppRoute.AdminSettings -> AdminSettingsScreen()
                 AppRoute.Disclaimer -> DisclaimerScreen(
                     hasAcceptedDisclaimer = hasAcceptedDisclaimer,
                     hideDisclaimerOnLaunch = hideDisclaimerOnLaunch,
@@ -1550,7 +1738,7 @@ private fun SoftDrawer(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     ProfilePhotoButton(size = 58.dp, photoUri = profilePhotoUri, onClick = onProfileInfo)
                     Column {
-                        Text("LUNAKAI Wellness Companion", color = TextDark, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text("LunaKai Wellness Companion", color = TextDark, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                         Text("Tap + to update your profile", color = TextMuted, fontSize = 13.sp)
                     }
                 }
@@ -1592,6 +1780,7 @@ private fun PremiumTopBar(
         AppRoute.PrivacySettings,
         AppRoute.NotificationSettings,
         AppRoute.AppearanceSettings,
+        AppRoute.AdminSettings,
     )
 
     Box(
@@ -1653,7 +1842,7 @@ private fun PremiumTopBar(
                                     expanded = false
                                     when (item) {
                                         "Change Companion", "Manage My Companions" -> onNavigate(AppRoute.Companions)
-                                        "Voice & Live Settings" -> onNavigate(AppRoute.VoiceLiveSettings)
+                                        "Voice & Chat Settings" -> onNavigate(AppRoute.VoiceLiveSettings)
                                         "Open Settings" -> onNavigate(AppRoute.Preferences)
                                         "Privacy Settings" -> onNavigate(AppRoute.PrivacySettings)
                                         "View Disclaimer" -> onNavigate(AppRoute.Disclaimer)
@@ -1662,7 +1851,7 @@ private fun PremiumTopBar(
                                         "Save Chat to Journal" -> onNavigate(AppRoute.Journal)
                                         "View Journal Entries" -> onNavigate(AppRoute.SavedJournalEntries)
                                         "Save Call Notes to Journal" -> onNavigate(AppRoute.Journal)
-                                        "Companion Appearance" -> onNavigate(AppRoute.AppearanceSettings)
+                                        "Companion Settings" -> onNavigate(AppRoute.AppearanceSettings)
                                         "End Session" -> onNavigate(AppRoute.Home)
                                         "Storage Location" -> onJournalStorage()
                                         "Save on Device" -> onJournalStorageSelected(JournalStorage.Device)
@@ -1689,7 +1878,7 @@ private fun overflowItems(route: AppRoute): List<String> {
         AppRoute.Home -> listOf("Change Companion", "Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.Chat -> listOf("Open Settings", "View Disclaimer", "Sign Out")
         AppRoute.TextChat -> listOf("Phone", "Change Companion", "Open Settings", "Clear Chat", "Save Chat to Journal")
-        AppRoute.LiveCompanionCall -> listOf("Change Companion", "Open Settings", "Companion Appearance", "Save Call Notes to Journal", "Privacy Settings", "End Session")
+        AppRoute.LiveCompanionCall -> listOf("Change Companion", "Open Settings", "Companion Settings", "Save Call Notes to Journal", "Privacy Settings", "End Session")
         AppRoute.Journal -> listOf("Storage Location", "Save on Device", "Save to Cloud", "Save to Both", "View Journal Entries", "Export Journal", "Clear Draft", "Privacy Settings")
         AppRoute.Fitness -> listOf("Progress Tracker", "Open Wellness")
         AppRoute.FitnessProgress -> listOf("Open Wellness")
@@ -1784,6 +1973,13 @@ private fun maleVoiceOptions() = listOf(
     "Soft Romance Male",
     "Protective Warm Male",
     "Smooth Low Male",
+    "Soft Sexy Male",
+    "Velvet Lover Male",
+    "Bedroom Whisper Male",
+    "Romantic Deep Male",
+    "Slow Burn Male",
+    "Gentle Low Male",
+    "Smoky Soft Male",
 )
 
 private fun neutralVoiceOptions() = listOf("Neutral Calm", "Neutral Bright", "Custom Voice Later")
@@ -1800,60 +1996,49 @@ private fun voiceForGender(gender: String, currentVoice: String): String {
 }
 
 private fun isMaleVoiceOption(voiceName: String): Boolean = voiceName in maleVoiceOptions()
-
 private fun voicePreviewPitch(voiceName: String): Float = when {
     voiceName.equals("Midnight Male", ignoreCase = true) -> 0.54f
     voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.55f
+    voiceName.equals("Slow Burn Male", ignoreCase = true) -> 0.55f
+    voiceName.equals("Velvet Lover Male", ignoreCase = true) -> 0.56f
     voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.57f
+    voiceName.equals("Romantic Deep Male", ignoreCase = true) -> 0.57f
     voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.58f
+    voiceName.equals("Bedroom Whisper Male", ignoreCase = true) -> 0.58f
     voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.60f
+    voiceName.equals("Smoky Soft Male", ignoreCase = true) -> 0.60f
     voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.61f
+    voiceName.equals("Soft Sexy Male", ignoreCase = true) -> 0.62f
     voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.63f
     voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.64f
+    voiceName.equals("Gentle Low Male", ignoreCase = true) -> 0.64f
     voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.66f
-    voiceName.contains("Deep", ignoreCase = true) -> 0.62f
-    voiceName.contains("Low", ignoreCase = true) -> 0.66f
-    voiceName.contains("Velvet", ignoreCase = true) -> 0.68f
-    voiceName.contains("Silky", ignoreCase = true) -> 0.72f
-    isMaleVoiceOption(voiceName) -> 0.70f
     voiceName.contains("Bright", ignoreCase = true) -> 1.18f
     voiceName.contains("Whisper", ignoreCase = true) -> 0.94f
+    isMaleVoiceOption(voiceName) -> 0.62f
     else -> 1.06f
 }
 
 private fun voicePreviewRate(voiceName: String): Float = when {
     voiceName.equals("Midnight Male", ignoreCase = true) -> 0.74f
+    voiceName.equals("Bedroom Whisper Male", ignoreCase = true) -> 0.74f
     voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.76f
+    voiceName.equals("Slow Burn Male", ignoreCase = true) -> 0.76f
     voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.78f
+    voiceName.equals("Velvet Lover Male", ignoreCase = true) -> 0.78f
     voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.80f
+    voiceName.equals("Soft Sexy Male", ignoreCase = true) -> 0.80f
+    voiceName.equals("Smoky Soft Male", ignoreCase = true) -> 0.80f
     voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.82f
     voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.82f
+    voiceName.equals("Romantic Deep Male", ignoreCase = true) -> 0.82f
     voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.84f
+    voiceName.equals("Gentle Low Male", ignoreCase = true) -> 0.84f
     voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.86f
     voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.88f
-    voiceName.contains("Motivational", ignoreCase = true) -> 1.05f
-    voiceName.contains("Velvet", ignoreCase = true) || voiceName.contains("Silky", ignoreCase = true) -> 0.84f
     voiceName.contains("Whisper", ignoreCase = true) -> 0.82f
     voiceName.contains("Calm", ignoreCase = true) || voiceName.contains("Soft", ignoreCase = true) -> 0.88f
     else -> 0.95f
-}
-
-private fun voicePreviewDescription(voiceName: String): String {
-    val maleDescription = when {
-        voiceName.equals("Deep Smooth Male", ignoreCase = true) -> "Low, smooth, relaxed"
-        voiceName.equals("Low Velvet Male", ignoreCase = true) -> "Deep, slow, velvet"
-        voiceName.equals("Silky Soft Male", ignoreCase = true) -> "Soft, silky, intimate"
-        voiceName.equals("Warm Whisper Male", ignoreCase = true) -> "Warm, quiet, close"
-        voiceName.equals("Sultry Calm Male", ignoreCase = true) -> "Calm, low, sultry"
-        voiceName.equals("Midnight Male", ignoreCase = true) -> "Dark, slow, smooth"
-        voiceName.equals("Soft Romance Male", ignoreCase = true) -> "Gentle, warm, romantic"
-        voiceName.equals("Protective Warm Male", ignoreCase = true) -> "Steady, warm, reassuring"
-        voiceName.equals("Smooth Low Male", ignoreCase = true) -> "Smooth, low, easy"
-        else -> null
-    }
-    if (maleDescription != null) return maleDescription
-    val voiceGroup = if (isMaleVoiceOption(voiceName)) "Male voice preview" else "Female voice preview"
-    return "$voiceGroup - ${voiceName.removeSuffix(" Male").removeSuffix(" Female")}"
 }
 
 private fun voicePreviewSample(companionName: String): String {
@@ -1882,13 +2067,13 @@ private fun voiceHasAnyMarker(voice: Voice, markers: List<String>): Boolean {
 }
 
 private fun isInstalledMaleVoice(voice: Voice): Boolean {
-    return voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark"))
-        && !voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen"))
+    return voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark", "guy", "andrew", "brandon", "eric", "christopher"))
+        && !voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen", "jenny", "sara", "aria", "nancy"))
 }
 
 private fun isInstalledFemaleVoice(voice: Voice): Boolean {
-    return voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen"))
-        && !voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark"))
+    return voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen", "jenny", "sara", "aria", "nancy"))
+        && !voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark", "guy", "andrew", "brandon", "eric", "christopher"))
 }
 
 private fun bestInstalledVoiceForPreview(engine: TextToSpeech, voiceName: String): Voice? {
@@ -1917,6 +2102,31 @@ private fun voiceOptionBucket(voiceName: String, size: Int): Int {
     val femaleIndex = femaleVoiceOptions().indexOf(voiceName)
     if (femaleIndex >= 0) return femaleIndex % size
     return (voiceName.hashCode() and Int.MAX_VALUE) % size
+}
+
+private fun voicePreviewDescription(voiceName: String): String {
+    val maleDescription = when {
+        voiceName.equals("Deep Smooth Male", ignoreCase = true) -> "Low, smooth, relaxed"
+        voiceName.equals("Low Velvet Male", ignoreCase = true) -> "Deep, slow, velvet"
+        voiceName.equals("Silky Soft Male", ignoreCase = true) -> "Soft, silky, intimate"
+        voiceName.equals("Warm Whisper Male", ignoreCase = true) -> "Warm, quiet, close"
+        voiceName.equals("Sultry Calm Male", ignoreCase = true) -> "Calm, low, sultry"
+        voiceName.equals("Midnight Male", ignoreCase = true) -> "Dark, slow, smooth"
+        voiceName.equals("Soft Romance Male", ignoreCase = true) -> "Gentle, warm, romantic"
+        voiceName.equals("Protective Warm Male", ignoreCase = true) -> "Steady, warm, reassuring"
+        voiceName.equals("Smooth Low Male", ignoreCase = true) -> "Smooth, low, easy"
+        voiceName.equals("Soft Sexy Male", ignoreCase = true) -> "Soft, low, sensual"
+        voiceName.equals("Velvet Lover Male", ignoreCase = true) -> "Velvet, romantic, intimate"
+        voiceName.equals("Bedroom Whisper Male", ignoreCase = true) -> "Whispered, slow, close"
+        voiceName.equals("Romantic Deep Male", ignoreCase = true) -> "Deep, warm, romantic"
+        voiceName.equals("Slow Burn Male", ignoreCase = true) -> "Slow, steady, seductive"
+        voiceName.equals("Gentle Low Male", ignoreCase = true) -> "Gentle, low, calming"
+        voiceName.equals("Smoky Soft Male", ignoreCase = true) -> "Smoky, soft, smooth"
+        else -> null
+    }
+    if (maleDescription != null) return maleDescription
+    val voiceGroup = if (isMaleVoiceOption(voiceName)) "Male voice preview" else "Female voice preview"
+    return "$voiceGroup - ${voiceName.removeSuffix(" Male").removeSuffix(" Female")}"
 }
 
 private fun wakeAssistantIdFor(companion: CompanionProfile): String {
@@ -2108,7 +2318,7 @@ private fun SplashScreen() {
         ) {
             CompanionAvatar(size = 132.dp, label = "FA", glow = true)
             Spacer(Modifier.height(24.dp))
-            Text("LUNAKAI Wellness Companion", color = TextDark, fontSize = 32.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text("LunaKai Wellness Companion", color = TextDark, fontSize = 32.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             Text(
                 "Your soft place to think, feel, and be understood.",
                 color = TextMuted,
@@ -2209,29 +2419,24 @@ private fun LoginScreen(
 
     GradientBackground {
         ScreenScroll {
-            Text("LUNAKAI Wellness Companion", color = TextDark, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text("LunaKai Wellness Companion", color = TextDark, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Text("Welcome back, love.", color = TextDark, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
             Text("Your companion space is waiting for you.", color = TextMuted, fontSize = 16.sp)
             GlassCard {
                 RoundedInputField(value = email, onValueChange = { email = it }, label = "Email")
                 Spacer(Modifier.height(12.dp))
-                RoundedInputField(value = password, onValueChange = { password = it }, label = "Password")
-                Spacer(Modifier.height(18.dp))
-                SoftDropdown(
-                    label = "Chat message saving",
-                    selected = defaultChatStorage.label,
-                    options = ChatStorage.entries.map { it.label },
-                    onSelected = { label ->
-                        ChatStorage.entries.firstOrNull { it.label == label }?.let(onChatStorageChange)
-                    },
+                RoundedInputField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = "Password",
+                    visualTransformation = PasswordVisualTransformation(),
                 )
-                Text(defaultChatStorage.body, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(18.dp))
                 authMessage?.let {
                     Text(it, color = if (it.contains("failed", ignoreCase = true)) WarningPeach else TextMuted, fontSize = 13.sp, lineHeight = 17.sp)
                 }
                 PrimaryGradientButton(
-                    if (loading) "Working..." else "Sign In",
+                    if (loading) "Logging in..." else "Sign In",
                     onClick = {
                         if (!loading) runAuth("Signing in") { firebaseSignIn(email, password) }
                     },
@@ -2350,7 +2555,7 @@ private fun HomeDashboardScreen(
         )
     }
     val visibleSlots: List<CompanionProfile?> = orderedHomeCompanions.take(8).map { it } + List(maxOf(0, 8 - orderedHomeCompanions.size)) { null }
-    val greeting = timeBasedGreeting("Fancie")
+    val greeting = timeBasedGreeting("LunaKai")
 
     GradientBackground {
         ScreenScroll {
@@ -2585,7 +2790,25 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     val context = LocalContext.current
     val openRouterKey = context.prefString("openrouter_api_key", "")
     val deepSeekKey = context.prefString("deepseek_api_key", "")
-    val geminiContext = remember(companion, openRouterKey, deepSeekKey) {
+    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
+    val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
+    val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
+    val adminEmoIntelProfile = context.adminEmoIntelPrompt()
+    val adultProviderActive = companion.isAdultRoleplayEnabled() &&
+        companion.bdsmIdentitySettings.adultConsentConfirmed &&
+        companion.bdsmIdentitySettings.adultProviderEnabled
+    val effectiveProviderEnabled = true
+    val effectiveEndpoint = if (adultProviderActive) {
+        companion.bdsmIdentitySettings.adultProviderEndpoint.ifBlank { globalAiEndpoint }
+    } else {
+        globalAiEndpoint
+    }
+    val effectiveModel = when {
+        providerNameFromEndpoint(effectiveEndpoint) == "LunaKai Adult" -> LUNAKAI_ADULT_MODEL
+        adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
+        else -> globalAiModel
+    }
+    val geminiContext = remember(companion, openRouterKey, deepSeekKey, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2603,11 +2826,12 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             bdsmPauseWord = companion.bdsmIdentitySettings.defaultPauseWord,
             anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
             adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
-            adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
-            adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
-            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+            adultProviderEnabled = effectiveProviderEnabled,
+            adultProviderEndpoint = effectiveEndpoint,
+            adultProviderModel = effectiveModel,
             openRouterApiKey = openRouterKey,
             deepSeekApiKey = deepSeekKey,
+            adminEmoIntelProfile = adminEmoIntelProfile,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2628,14 +2852,6 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
 
     GradientBackground {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SecondarySoftButton("See Companion Live", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.LiveCompanionCall) })
-                SecondarySoftButton("Settings", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.Preferences) })
-            }
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -2648,7 +2864,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             }
             GlassCard(padding = 10.dp) {
                 when (val state = geminiState) {
-                    GeminiCompanionState.Loading -> Text("${companion.name} is connecting to Gemini...", color = TextMuted, fontSize = 12.sp)
+                    GeminiCompanionState.Loading -> Text("${companion.name} is connecting to LunaKai AI...", color = TextMuted, fontSize = 12.sp)
                     is GeminiCompanionState.Error -> Text(state.message, color = WarningPeach, fontSize = 12.sp, lineHeight = 16.sp)
                     is GeminiCompanionState.Success, null -> Unit
                 }
@@ -2679,7 +2895,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                     SmallCircleButton("send") {
                         if (input.isNotBlank() && !isTyping) {
                             val userText = input.trim()
-                            val history = messages.map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
+                            val history = messages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
                             val bdsmSetupResponse = nextBdsmSetupResponse(companion, bdsmSessionState, userText)
                             input = ""
                             if (bdsmSetupResponse != null) {
@@ -2711,7 +2927,9 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     }
     var showTextChat by remember { mutableStateOf(false) }
     var showCaptureSheet by remember { mutableStateOf(false) }
+    var showEndCallPrompt by remember { mutableStateOf(false) }
     var captureMessage by remember { mutableStateOf<String?>(null) }
+    var pendingLivePhotoUri by rememberSaveable(companion.id, "live_photo") { mutableStateOf<String?>(null) }
     val chatViewModel: ChatViewModel = viewModel(key = "live_chat_${companion.id}")
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
     val chatMessages by chatViewModel.messages.collectAsState()
@@ -2742,9 +2960,33 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val liveRepository = remember { GeminiLiveCompanionRepository() }
+    val callAnswerStyle = context.prefString(voiceSettingKey(companion.id, "answerStyle"), "Answer with voice and text")
+    val callAnswerPhrases = context.prefString(voiceSettingKey(companion.id, "answerPhrases"), DEFAULT_CALL_ANSWER_PHRASES)
+    val callRingtoneChoice = context.prefString(voiceSettingKey(companion.id, "ringtoneChoice"), CALL_RINGTONE_OPTIONS.first())
+    val callRingtoneUri = context.prefString(voiceSettingKey(companion.id, "ringtoneUri"), "")
+    val callUrgency = context.prefString(voiceSettingKey(companion.id, "answerUrgency"), CALL_URGENCY_OPTIONS.first())
+
     val openRouterKey = context.prefString("openrouter_api_key", "")
     val deepSeekKey = context.prefString("deepseek_api_key", "")
-    val geminiContext = remember(companion, openRouterKey, deepSeekKey) {
+    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
+    val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
+    val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
+    val adminEmoIntelProfile = context.adminEmoIntelPrompt()
+    val adultProviderActive = companion.isAdultRoleplayEnabled() &&
+        companion.bdsmIdentitySettings.adultConsentConfirmed &&
+        companion.bdsmIdentitySettings.adultProviderEnabled
+    val effectiveProviderEnabled = true
+    val effectiveEndpoint = if (adultProviderActive) {
+        companion.bdsmIdentitySettings.adultProviderEndpoint.ifBlank { globalAiEndpoint }
+    } else {
+        globalAiEndpoint
+    }
+    val effectiveModel = when {
+        providerNameFromEndpoint(effectiveEndpoint) == "LunaKai Adult" -> LUNAKAI_ADULT_MODEL
+        adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
+        else -> globalAiModel
+    }
+    val geminiContext = remember(companion, openRouterKey, deepSeekKey, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
         GeminiCompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2762,34 +3004,37 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             bdsmPauseWord = companion.bdsmIdentitySettings.defaultPauseWord,
             anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
             adultPhrasePreferences = if (companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed) companion.bdsmIdentitySettings.preferredAdultPhrases else "",
-            adultProviderEnabled = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.adultProviderEnabled,
-            adultProviderEndpoint = companion.bdsmIdentitySettings.adultProviderEndpoint,
-            adultProviderModel = companion.bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+            adultProviderEnabled = effectiveProviderEnabled,
+            adultProviderEndpoint = effectiveEndpoint,
+            adultProviderModel = effectiveModel,
             openRouterApiKey = openRouterKey,
             deepSeekApiKey = deepSeekKey,
+            adminEmoIntelProfile = adminEmoIntelProfile,
         )
     }
     var liveSessionState by remember { mutableStateOf<GeminiLiveSessionState>(GeminiLiveSessionState.Idle) }
     var cameraEnabled by remember { mutableStateOf(false) }
     var pendingLiveMode by remember { mutableStateOf<LiveMode?>(null) }
+    var pendingAnswerPhrase by remember { mutableStateOf<String?>(null) }
     var permissionMessage by remember { mutableStateOf<String?>(null) }
-    fun startGeminiLive(mode: LiveMode) {
+    fun startGeminiLive(mode: LiveMode, answerPhrase: String? = null) {
         val modeLabel = when (mode) {
             LiveMode.VOICE -> "voice call"
             LiveMode.TEXT -> "text chat"
         }
+        val answerCaption = answerPhrase?.takeIf { it.isNotBlank() }?.let { "${companion.name}: $it" }
         state = state.copy(
             selectedMode = mode,
             isMicOn = true,
             isUserSpeaking = true,
-            isCompanionSpeaking = false,
-            callStatus = "Connecting to Gemini Live...",
-            currentCaption = "Connecting voice. When it is ready, speak naturally to ${companion.name}.",
+            isCompanionSpeaking = answerCaption != null,
+            callStatus = "Connecting to live voice...",
+            currentCaption = answerCaption ?: "Connecting voice. When it is ready, speak naturally to ${companion.name}.",
         )
         cameraEnabled = false
         liveSessionState = GeminiLiveSessionState.Connecting
         scope.launch {
-            val result = liveRepository.startAudioConversation(geminiContext, modeLabel)
+            val result = liveRepository.startAudioConversation(geminiContext, modeLabel, answerPhrase)
             liveSessionState = result
             state = when (result) {
                 GeminiLiveSessionState.Idle,
@@ -2798,7 +3043,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                     callStatus = "Voice connected",
                     isMicOn = true,
                     isUserSpeaking = true,
-                    currentCaption = "${companion.name} can hear you now. Speak when you're ready.",
+                    currentCaption = answerCaption ?: "${companion.name} can hear you now. Speak when you're ready.",
                 )
                 is GeminiLiveSessionState.Error -> state.copy(
                     callStatus = "Voice setup needs attention",
@@ -2811,26 +3056,117 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     }
     val livePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val mode = pendingLiveMode
+        val answerPhrase = pendingAnswerPhrase
         pendingLiveMode = null
+        pendingAnswerPhrase = null
         val micGranted = grants[Manifest.permission.RECORD_AUDIO] ?: context.hasPermission(Manifest.permission.RECORD_AUDIO)
         val cameraGranted = grants[Manifest.permission.CAMERA] ?: context.hasPermission(Manifest.permission.CAMERA)
         if (!micGranted) {
             permissionMessage = "Voice mode needs microphone permission before it can start."
         } else if (mode != null) {
             permissionMessage = null
-            startGeminiLive(mode)
+            startGeminiLive(mode, answerPhrase)
         }
     }
-    fun requestOrStartGeminiLive(mode: LiveMode) {
+    val livePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uriText = pendingLivePhotoUri.orEmpty()
+            captureMessage = if (uriText.isNotBlank()) {
+                state = state.copy(
+                    currentCaption = "Photo shared with ${companion.name}. ${companion.name} is observing it with you in real time.",
+                    isCompanionSpeaking = true,
+                    isUserSpeaking = false,
+                )
+                "Photo sent to ${companion.name} for real-time observation."
+            } else {
+                "Photo captured, but the image location was not returned."
+            }
+        } else {
+            captureMessage = "Photo capture canceled."
+        }
+        pendingLivePhotoUri = null
+        showCaptureSheet = false
+    }
+
+    fun createLivePhotoUri(): Uri? = runCatching {
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "lunakai_live_photo_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/LunaKai")
+            }
+        }
+        resolver.insert(collection, values)
+    }.getOrNull()
+
+    fun takeLivePhotoForCompanion() {
+        val outputUri = createLivePhotoUri()
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            outputUri?.let {
+                putExtra(MediaStore.EXTRA_OUTPUT, it)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            captureMessage = "No camera app is available for photo capture."
+            showCaptureSheet = false
+        } else {
+            pendingLivePhotoUri = outputUri?.toString()
+            livePhotoLauncher.launch(intent)
+        }
+    }
+    fun requestOrStartGeminiLive(mode: LiveMode, answerPhrase: String? = null) {
         val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
         val missing = requiredPermissions.filterNot { context.hasPermission(it) }
         if (missing.isNotEmpty()) {
             pendingLiveMode = mode
+            pendingAnswerPhrase = answerPhrase
             permissionMessage = "Allow microphone access to start ${companion.name}."
             livePermissionLauncher.launch(missing.toTypedArray())
         } else {
             permissionMessage = null
-            startGeminiLive(mode)
+            startGeminiLive(mode, answerPhrase)
+        }
+    }
+
+    fun ringCompanionThenStartCall() {
+        if (state.isMicOn || liveSessionState is GeminiLiveSessionState.Connected || liveSessionState is GeminiLiveSessionState.Connecting) {
+            return
+        }
+        val answerPhrase = selectedCallAnswerPhrase(callAnswerPhrases, companion.name)
+        val ringDuration = callRingDurationMillis(callUrgency, companion)
+        state = state.copy(
+            callStatus = "Ringing ${companion.name}...",
+            isMicOn = false,
+            isUserSpeaking = false,
+            isCompanionSpeaking = false,
+            currentCaption = "Calling ${companion.name}...",
+        )
+        scope.launch {
+            val ringPlayer = startCallRingPlayer(context, callRingtoneChoice, callRingtoneUri)
+            delay(ringDuration)
+            stopCallRingPlayer(ringPlayer)
+            val shouldSpeakAnswer = callAnswerStyle != "Answer with text only"
+            val shouldShowAnswerText = callAnswerStyle != "Answer with voice only"
+            state = state.copy(
+                callStatus = "${companion.name} answered",
+                isCompanionSpeaking = shouldSpeakAnswer,
+                currentCaption = if (shouldShowAnswerText) {
+                    "${companion.name}: $answerPhrase"
+                } else {
+                    "${companion.name} answered. Listen for the voice greeting."
+                },
+            )
+            requestOrStartGeminiLive(
+                LiveMode.VOICE,
+                answerPhrase.takeIf { shouldSpeakAnswer },
+            )
         }
     }
     fun stopGeminiLive() {
@@ -2842,8 +3178,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                 isMicOn = false,
                 isUserSpeaking = false,
                 isCompanionSpeaking = false,
-                callStatus = "Mic muted",
-                currentCaption = "Live voice is off. Tap Mic or Voice Chat when you want to reconnect.",
+                callStatus = "Call ended",
+                currentCaption = "Call ended. Start a new call whenever you want ${companion.name} to answer.",
             )
         }
     }
@@ -2855,7 +3191,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     }
 
     LaunchedEffect(state.isMicOn, state.selectedMode) {
-        if (state.isMicOn) {
+        if (state.isMicOn && !state.currentCaption.startsWith("${companion.name}:")) {
             state = state.copy(
                 callStatus = "Listening...",
                 isUserSpeaking = true,
@@ -2929,38 +3265,31 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                    ModeChip("Text Chat", state.selectedMode == LiveMode.TEXT) {
-                        stopGeminiLive()
-                        state = state.copy(selectedMode = LiveMode.TEXT)
-                        showTextChat = true
-                    }
-                    ModeChip("Voice Chat", state.selectedMode == LiveMode.VOICE) {
-                        requestOrStartGeminiLive(LiveMode.VOICE)
-                    }
-                }
+                Text("Tap Call to ring ${companion.name}. When they answer, speak naturally like a real call with a buddy, lover, or friend.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
 
                 captureMessage?.let { message ->
                     GlassCard(background = SuccessGreen.copy(alpha = 0.24f)) {
                         Text(message, color = TextDark, fontWeight = FontWeight.Bold)
-                        Text("Only the current app screen is captured when you tap Capture. Nothing records in the background.", color = TextMuted)
+                        Text("Photos are shared from this live companion screen so your companion can respond to what you show them.", color = TextMuted)
                     }
                 }
 
                 GlassCard {
                     Text("Call Controls", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        CallControlButton("Call", R.drawable.ic_call_end, state.isMicOn, SuccessGreen) {
+                            ringCompanionThenStartCall()
+                        }
                         CallControlButton("Mic", R.drawable.ic_mic, state.isMicOn, RosePink.copy(alpha = 0.18f + micGlow * 0.42f)) {
                             if (state.isMicOn) stopGeminiLive() else requestOrStartGeminiLive(LiveMode.VOICE)
                         }
                         CallControlButton("Speaker", R.drawable.ic_speaker, state.isSpeakerOn, CalmBlue) {
                             state = state.copy(isSpeakerOn = !state.isSpeakerOn)
                         }
-                        CallControlButton("Switch", R.drawable.ic_swap, false, GoldAccent) { onNavigate(AppRoute.Companions) }
-                        CallControlButton("Capture", R.drawable.ic_capture, showCaptureSheet, SuccessGreen) { showCaptureSheet = true }
+                        CallControlButton("Photo", R.drawable.ic_capture, showCaptureSheet, SuccessGreen) { showCaptureSheet = true }
                         CallControlButton("End", R.drawable.ic_call_end, false, WarningPeach) {
                             stopGeminiLive()
-                            onNavigate(AppRoute.Home)
+                            showEndCallPrompt = true
                         }
                     }
                 }
@@ -2970,28 +3299,37 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                 AlertDialog(
                     onDismissRequest = { showCaptureSheet = false },
                     containerColor = CardDark,
-                    title = { Text("Screen Capture", color = TextDark, fontWeight = FontWeight.Bold) },
+                    title = { Text("Photo to Companion", color = TextDark, fontWeight = FontWeight.Bold) },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Capture this live companion moment?", color = TextMuted)
-                            PrimaryGradientButton("Capture Screen") {
-                                captureMessage = "Captured successfully."
-                                showCaptureSheet = false
-                            }
-                            SecondarySoftButton("Save to Device") {
-                                captureMessage = "Captured successfully. Save-to-device is ready for real capture wiring."
-                                showCaptureSheet = false
-                            }
-                            SecondarySoftButton("Save to Journal") {
-                                captureMessage = "Captured successfully. Journal save can connect to entries next."
-                                showCaptureSheet = false
-                                onNavigate(AppRoute.Journal)
-                            }
+                            Text("Take a photo to show ${companion.name}. Your companion will observe it inside the live conversation.", color = TextMuted)
+                            PrimaryGradientButton("Take Photo") { takeLivePhotoForCompanion() }
                         }
                     },
                     confirmButton = {},
                     dismissButton = {
                         TextButton(onClick = { showCaptureSheet = false }) { Text("Cancel", color = DeepRose) }
+                    },
+                )
+            }
+
+            if (showEndCallPrompt) {
+                AlertDialog(
+                    onDismissRequest = { showEndCallPrompt = false },
+                    containerColor = CardDark,
+                    title = { Text("Call ended", color = TextDark, fontWeight = FontWeight.Bold) },
+                    text = { Text("Would you like to transcribe this live call and save it to companion memory or journal?", color = TextMuted) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            captureMessage = "Transcription request saved. Connect live transcription in Voice & Chat Settings to store the call notes."
+                            showEndCallPrompt = false
+                        }) { Text("Transcribe", color = DeepRose) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            showEndCallPrompt = false
+                            onNavigate(AppRoute.Home)
+                        }) { Text("Not now", color = TextMuted) }
                     },
                 )
             }
@@ -3054,7 +3392,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                                             LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
-                                        val history = chatMessages.map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
+                                        val history = chatMessages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
                                         chatViewModel.sendMessage(companion, geminiContext, userText, history, mode)
                                         state = state.copy(currentCaption = userText, isUserSpeaking = true, isCompanionSpeaking = false)
                                         textInput = ""
@@ -3154,7 +3492,7 @@ private fun LiveSessionStatusCard(
 ) {
     val message = when (liveSessionState) {
         GeminiLiveSessionState.Idle -> permissionMessage
-        GeminiLiveSessionState.Connecting -> "Connecting to Gemini Live voice..."
+        GeminiLiveSessionState.Connecting -> "Connecting to live voice..."
         is GeminiLiveSessionState.Connected -> liveSessionState.message
         is GeminiLiveSessionState.Error -> liveSessionState.message
     } ?: return
@@ -3325,7 +3663,7 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                     SoftStatusChip("Ready to connect", SuccessGreen)
                     Text(companion.voice, color = TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
                     Text(
-                        "Text, talk, or sit with your companion in a premium live space. Voice Chat connects through Gemini Live when your Firebase setup is ready.",
+                        "Text, talk, or sit with your companion in a premium live space. Voice Chat connects through your selected LunaKai AI provider.",
                         color = TextMuted,
                         textAlign = TextAlign.Center,
                         lineHeight = 21.sp,
@@ -3333,7 +3671,7 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                     )
                 }
             }
-            PrimaryGradientButton("Open Live Companion Call", onClick = { onNavigate(AppRoute.LiveCompanionCall) })
+            PrimaryGradientButton("Open Live Companion", onClick = { onNavigate(AppRoute.LiveCompanionCall) })
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 QuickActionCard("Text Chat", "Continue the conversation by typing.", "chat", RosePink, Modifier.weight(1f)) { onNavigate(AppRoute.TextChat) }
                 QuickActionCard("Voice Chat", "Microphone-ready companion mode.", "voice", CalmBlue, Modifier.weight(1f)) { onNavigate(AppRoute.LiveCompanionCall) }
@@ -3479,7 +3817,7 @@ private fun PersonalityBuilderScreen(
         "Soothing" to "Slow, calming, and tender",
     )
     val supportOptions = listOf("Stress", "Self-worth", "Confidence", "Grounding", "Journaling", "Reflection", "Relationships", "Creativity", "Fitness")
-    val roleplayStyles = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "BDSM")
+    val roleplayStyles = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "RolePlay")
     val characterModes = listOf(
         "Best Friend" to "Supportive, loyal, honest, and emotionally present.",
         "Romantic Partner" to "Affectionate, attentive, emotionally close, and caring.",
@@ -3498,6 +3836,9 @@ private fun PersonalityBuilderScreen(
     var workoutTimerState by remember { mutableStateOf("Ready") }
     var pastedScript by remember { mutableStateOf("") }
     var stopWord by remember { mutableStateOf("Pause") }
+    var openBuilderSection by remember { mutableStateOf<String?>(null) }
+    var showRolePlaySetup by remember { mutableStateOf(false) }
+    fun toggleBuilderSection(section: String) { openBuilderSection = if (openBuilderSection == section) null else section }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             runCatching {
@@ -3514,7 +3855,7 @@ private fun PersonalityBuilderScreen(
 
     GradientBackground {
         ScreenScroll {
-            CompanionImageSquare(companion)
+            CompanionImageSquare(companion, showBlankAddPlaceholder = isCreatingNew)
             SectionHeader("Appearance")
             GlassCard {
                 SoftDropdown(
@@ -3532,7 +3873,6 @@ private fun PersonalityBuilderScreen(
                     SecondarySoftButton("Female Avatars", modifier = Modifier.weight(1f), onClick = onOpenFemaleAvatars)
                     SecondarySoftButton("Male Avatars", modifier = Modifier.weight(1f), onClick = onOpenMaleAvatars)
                 }
-                Text("Firebase Storage path ready: users/{userId}/companions/ using the signed-in Auth UID.", color = TextMuted, fontSize = 13.sp)
             }
             SectionHeader("Character Mode")
             CharacterModeGrid(characterModes, companion.characterMode) { mode ->
@@ -3554,12 +3894,17 @@ private fun PersonalityBuilderScreen(
                     onCompanionChange(companion.copy(gender = gender, voice = voiceForGender(gender, companion.voice)))
                 }
                 RoundedInputField(companion.shortDescription, { onCompanionChange(companion.copy(shortDescription = it)) }, "Short description", minLines = 2)
+                SoftDropdown("Astrological sign", companion.zodiacSign ?: "No sign preference", listOf("Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces", "No sign preference")) { sign ->
+                    onCompanionChange(companion.copy(zodiacSign = sign))
+                }
             }
             SectionHeader("Voice")
             GlassCard {
-                SoftDropdown("Companion voice", companion.voice, allowedVoiceOptions) { voice ->
+                SoftDropdown("Voice settings", companion.voice.ifBlank { allowedVoiceOptions.first() }, allowedVoiceOptions) { voice ->
                     onCompanionChange(companion.copy(voice = voice))
                 }
+                MiniStateCard("Selected sound", voicePreviewDescription(companion.voice.ifBlank { allowedVoiceOptions.first() }))
+                Text("Use this dropdown to choose the companion voice before saving. Each option has its own pitch, speed, and live voice mapping where the provider supports it.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
 
             SectionHeader("Personality Traits", "Choose up to 4 traits.")
@@ -3585,95 +3930,20 @@ private fun PersonalityBuilderScreen(
                 }
             }
 
-            SectionHeader("Roleplay Settings")
-            GlassCard {
-                ToggleRow("Roleplay enabled", companion.roleplayEnabled) { onCompanionChange(companion.copy(roleplayEnabled = it)) }
-                val selectedRoleplayStyles = companion.roleplayStyles.ifEmpty { listOf(companion.roleplayStyle) }.toSet()
-                CheckboxOptionGrid(
-                    options = roleplayStyles,
-                    selected = selectedRoleplayStyles,
-                    onToggle = { option ->
-                        val next = if (option in selectedRoleplayStyles) {
-                            selectedRoleplayStyles - option
-                        } else {
-                            selectedRoleplayStyles + option
-                        }
-                        val nextList = next.ifEmpty { setOf("Wellness Coach") }.toList()
-                        val bdsmSettings = if (option == "BDSM" && option !in selectedRoleplayStyles) {
-                            companion.bdsmIdentitySettings.copy(enabled = companion.bdsmIdentitySettings.adultConsentConfirmed)
-                        } else if (option == "BDSM") {
-                            companion.bdsmIdentitySettings.copy(enabled = false)
-                        } else {
-                            companion.bdsmIdentitySettings
-                        }
-                        val primaryRoleplayStyle = if (option in nextList) option else nextList.first()
-                        onCompanionChange(companion.copy(roleplayStyles = nextList, roleplayStyle = primaryRoleplayStyle, bdsmIdentitySettings = bdsmSettings))
-                    },
-                )
-                RoleplayDetails(
-                    style = companion.roleplayStyle,
-                    adultRoleplaySelected = companion.isAdultRoleplaySelected(),
-                    timerDuration = timerDuration,
-                    onTimerDurationChange = { timerDuration = it },
-                    workoutTimerState = workoutTimerState,
-                    onWorkoutTimerStateChange = { workoutTimerState = it },
-                    motivationStyle = motivationStyle,
-                    onMotivationStyleChange = { motivationStyle = it },
-                    pastedScript = pastedScript,
-                    onPastedScriptChange = { pastedScript = it },
-                    stopWord = stopWord,
-                    onStopWordChange = { stopWord = it },
-                    boundaries = companion.safeBoundaries,
-                    onBoundariesChange = { onCompanionChange(companion.copy(safeBoundaries = it)) },
-                    bdsmIdentitySettings = companion.bdsmIdentitySettings,
-                    onBdsmConsentChange = { confirmed ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(
-                                enabled = confirmed && "BDSM" in selectedRoleplayStyles,
-                                adultConsentConfirmed = confirmed,
-                            ),
-                        ))
-                    },
-                    onAnatomicalLanguageAllowedChange = { allowed ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(anatomicalLanguageAllowed = allowed),
-                        ))
-                    },
-                    onPreferredAdultPhrasesChange = { phrases ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(preferredAdultPhrases = phrases),
-                        ))
-                    },
-                    onAdultProviderEnabledChange = { enabled ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderEnabled = enabled),
-                        ))
-                    },
-                    onAdultProviderEndpointChange = { endpoint ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderEndpoint = endpoint),
-                        ))
-                    },
-                    onAdultProviderModelChange = { model ->
-                        onCompanionChange(companion.copy(
-                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultProviderModel = model),
-                        ))
-                    },
-                )
-            }
+            // RolePlay and advanced interaction controls now live under Settings > Active Companion.
 
-            SectionHeader("Communication Style")
-            GlassCard {
-                val selectedCommunicationStyles = companion.communicationStyles.ifEmpty { listOf(companion.communicationStyle) }.toSet()
+            SettingsAccordionSection(
+                title = "Communication Style",
+                subtitle = "Choose how this companion talks.",
+                expanded = openBuilderSection == "Communication Style",
+                onToggle = { toggleBuilderSection("Communication Style") },
+            ) {
+                val selectedCommunicationStyles = companion.communicationStyles.filter { it.isNotBlank() }.toSet()
                 CheckboxOptionGrid(
                     options = communicationCards.map { it.first },
                     selected = selectedCommunicationStyles,
                     onToggle = { option ->
-                        val next = if (option in selectedCommunicationStyles) {
-                            selectedCommunicationStyles - option
-                        } else {
-                            selectedCommunicationStyles + option
-                        }
+                        val next = if (option in selectedCommunicationStyles) selectedCommunicationStyles - option else selectedCommunicationStyles + option
                         val nextList = next.ifEmpty { setOf("Gentle") }.toList()
                         onCompanionChange(companion.copy(communicationStyles = nextList, communicationStyle = nextList.first()))
                     },
@@ -3681,8 +3951,12 @@ private fun PersonalityBuilderScreen(
                 )
             }
 
-            SectionHeader("Support Focus")
-            GlassCard {
+            SettingsAccordionSection(
+                title = "Support Focus",
+                subtitle = "Choose what this companion should be best at supporting.",
+                expanded = openBuilderSection == "Support Focus",
+                onToggle = { toggleBuilderSection("Support Focus") },
+            ) {
                 CheckboxOptionGrid(
                     options = supportOptions,
                     selected = companion.supportFocus,
@@ -3694,6 +3968,8 @@ private fun PersonalityBuilderScreen(
                 )
                 SupportFocusContentSections(companion.supportFocus)
             }
+            // RolePlay setup was moved out of Companion Builder and into Active Companion settings.
+
             GlassCard {
                 Text("Save Actions", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 PrimaryGradientButton("Save and Set Active", onClick = onSave)
@@ -3705,47 +3981,72 @@ private fun PersonalityBuilderScreen(
 }
 
 @Composable
-private fun CompanionImageSquare(companion: CompanionProfile) {
+private fun CompanionImageSquare(companion: CompanionProfile, showBlankAddPlaceholder: Boolean = false) {
     val imageBitmap = rememberProfileImage(companion.photoUri)
-    GlassCard {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(236.dp)
+                .shadow(18.dp, LargeShape)
+                .clip(LargeShape)
+                .background(Brush.linearGradient(listOf(CardAccent, DeepPlumBlack, CardDark)))
+                .border(1.dp, AccentPink.copy(alpha = 0.36f), LargeShape),
+            contentAlignment = Alignment.Center,
+        ) {
             Box(
                 modifier = Modifier
-                    .size(172.dp)
-                    .shadow(18.dp, LargeShape)
-                    .clip(LargeShape)
-                    .background(Brush.linearGradient(listOf(CardAccent, DeepPlumBlack, CardDark)))
-                    .border(1.dp, AccentPink.copy(alpha = 0.36f), LargeShape),
+                    .size(210.dp)
+                    .clip(CircleShape)
+                    .background(DeepPlumBlack.copy(alpha = 0.55f))
+                    .border(2.dp, AccentPink.copy(alpha = 0.55f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 when {
+                    showBlankAddPlaceholder -> BlankCompanionPhotoPlaceholder()
+
                     imageBitmap != null -> Image(
                         bitmap = imageBitmap,
-                        contentDescription = "${companion.name} photo",
+                        contentDescription = "Companion photo",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
+
                     companion.imageResId != null -> Image(
                         painter = painterResource(companion.imageResId),
-                        contentDescription = "${companion.name} avatar",
+                        contentDescription = "Companion avatar",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
-                    else -> CompanionAvatar(size = 118.dp, label = companion.name.take(2), glow = true)
+
+                    else -> CompanionAvatar(size = 178.dp, label = "", glow = true)
                 }
             }
-            Text(companion.name, color = TextDark, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-            val traits = companion.personalityTraits.ifEmpty { companion.personalityTags }
-            Text(
-                companion.shortDescription,
-                color = TextSecondary,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            SoftStatusChip(traits.joinToString(" / "), Lavender)
         }
+    }
+}
+
+@Composable
+private fun BlankCompanionPhotoPlaceholder() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(CircleShape)
+            .background(DeepPlumBlack.copy(alpha = 0.55f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "+",
+            color = TextDark,
+            fontSize = 58.sp,
+            fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -3814,7 +4115,7 @@ private fun CharacterModeCard(
                         .background(AccentPink.copy(alpha = 0.80f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("✓", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -3932,75 +4233,28 @@ private fun SupportFocusContentSections(selectedFocus: Set<String>) {
         "Reflection" to listOf("What am I feeling?", "What triggered this?", "What do I need right now?", "What can I release?"),
         "Relationships" to listOf("Communication prompts", "Boundary reflection", "Clarity questions", "Emotional pattern reflection"),
         "Creativity" to listOf("Idea prompts", "Motivation nudges", "Creative flow check-ins", "Project encouragement"),
+        "Fitness" to listOf("Movement goals", "Timer partner", "Workout motivation", "Progress reflection"),
     )
     val visible = selectedFocus.ifEmpty { setOf("Stress", "Grounding") }
+    var expandedFocus by remember { mutableStateOf<String?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 10.dp)) {
         Text("Support content ready", color = TextSecondary, fontWeight = FontWeight.SemiBold)
         visible.forEach { focus ->
-            GlassCard(background = CardAccent.copy(alpha = 0.48f), padding = 14.dp) {
-                Text(focus, color = TextPrimary, fontWeight = FontWeight.Bold)
-                content[focus].orEmpty().forEach { item ->
-                    Text("- $item", color = TextMuted, fontSize = 13.sp)
-                }
-            }
-        }
-        Text(
-            "These tools are supportive wellness prompts only and do not diagnose, treat, or replace professional care.",
-            color = TextMuted,
-            fontSize = 12.sp,
-            lineHeight = 17.sp,
-        )
-    }
-}
-
-@Composable
-private fun AvatarChoiceRow(
-    options: List<Pair<String, Int?>>,
-    selected: String,
-    onSelected: (String, Int?) -> Unit,
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-        options.forEach { (name, image) ->
-            Column(
-                modifier = Modifier
-                    .width(82.dp)
-                    .clip(LargeShape)
-                    .background(if (selected == name) CardAccent.copy(alpha = 0.96f) else CardDark.copy(alpha = 0.72f))
-                    .border(1.dp, if (selected == name) AccentPink else Color.White.copy(alpha = 0.12f), LargeShape)
-                    .clickable { onSelected(name, image) }
-                    .padding(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            GlassCard(
+                background = CardAccent.copy(alpha = 0.48f),
+                padding = 14.dp,
+                modifier = Modifier.clickable { expandedFocus = if (expandedFocus == focus) null else focus },
             ) {
-                CompanionAvatar(size = 54.dp, label = name.take(2), glow = selected == name, imageResId = image)
-                Text(name, color = TextDark, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            }
-        }
-    }
-}
-
-@Composable
-private fun VoiceOptionGroup(title: String, options: List<String>, selected: String, onSelected: (String) -> Unit) {
-    Text(title, color = TextDark, fontWeight = FontWeight.SemiBold)
-    MultiSelectChipGrid(options = options, selected = setOf(selected), onToggle = onSelected)
-}
-
-@Composable
-private fun TraitPicker(options: List<String>, selected: List<String>, onToggle: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        options.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEach { option ->
-                    Box(modifier = Modifier.weight(1f)) {
-                        MoodChip(label = option, selected = option in selected, onClick = { onToggle(option) })
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(focus, color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(if (expandedFocus == focus) "Hide" else "More", color = DeepRose, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                if (expandedFocus == focus) {
+                    content[focus].orEmpty().forEach { item ->
+                        Text("• $item", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
                     }
                 }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
-        }
-        if (selected.isNotEmpty()) {
-            Text("Chosen traits", color = TextMuted, fontSize = 13.sp)
-            SupportFocusChips(selected.toSet())
         }
     }
 }
@@ -4028,6 +4282,7 @@ private fun RoleplayDetails(
     onAdultProviderEnabledChange: (Boolean) -> Unit,
     onAdultProviderEndpointChange: (String) -> Unit,
     onAdultProviderModelChange: (String) -> Unit,
+    onBdsmIdentitySettingsChange: (BdsmIdentitySettings) -> Unit,
 ) {
     var detailOptions by remember(style) { mutableStateOf(setOf<String>()) }
     when {
@@ -4053,61 +4308,126 @@ private fun RoleplayDetails(
             var openRouterKey by remember { mutableStateOf(settingsContext.prefString("openrouter_api_key", "")) }
             var deepSeekKey by remember { mutableStateOf(settingsContext.prefString("deepseek_api_key", "")) }
             var showAdultProviderSetup by remember { mutableStateOf(false) }
-            val providerName = when {
-                bdsmIdentitySettings.adultProviderEndpoint.contains("deepseek", ignoreCase = true) -> "DeepSeek"
-                bdsmIdentitySettings.adultProviderEndpoint.isBlank() || bdsmIdentitySettings.adultProviderEndpoint.contains("openrouter", ignoreCase = true) -> "OpenRouter"
-                else -> "Custom endpoint"
+            var showAdultPhraseSetup by remember { mutableStateOf(false) }
+            val providerName = providerNameFromEndpoint(bdsmIdentitySettings.adultProviderEndpoint)
+            val activeProviderKey = when (providerName) {
+                "DeepSeek" -> deepSeekKey
+                "LunaKai Adult" -> ""
+                else -> openRouterKey
             }
-            val activeProviderKey = if (providerName == "DeepSeek") deepSeekKey else openRouterKey
-            LaunchedEffect(adultRoleplaySelected, bdsmIdentitySettings.adultConsentConfirmed) {
-                if (adultRoleplaySelected && bdsmIdentitySettings.adultConsentConfirmed) {
-                    showAdultProviderSetup = true
+
+            fun selectAdultProvider(choice: String) {
+                val updatedSettings = when (choice) {
+                    "LunaKai Adult" -> bdsmIdentitySettings.copy(
+                        adultProviderEnabled = false,
+                        adultProviderEndpoint = LUNAKAI_LOCAL_ENDPOINT,
+                        adultProviderModel = LUNAKAI_ADULT_MODEL,
+                    )
+
+                    "OpenRouter" -> bdsmIdentitySettings.copy(
+                        adultProviderEnabled = true,
+                        adultProviderEndpoint = "",
+                        adultProviderModel = AdultRoleplayRepository.DEFAULT_ADULT_MODEL,
+                    )
+
+                    "DeepSeek" -> bdsmIdentitySettings.copy(
+                        adultProviderEnabled = true,
+                        adultProviderEndpoint = AdultRoleplayRepository.DEEPSEEK_ENDPOINT,
+                        adultProviderModel = AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL,
+                    )
+
+                    "Gemini" -> bdsmIdentitySettings.copy(
+                        adultProviderEnabled = false,
+                        adultProviderEndpoint = "gemini",
+                        adultProviderModel = "gemini-2.5-flash",
+                    )
+
+                    "Custom endpoint" -> bdsmIdentitySettings.copy(
+                        adultProviderEnabled = true,
+                        adultProviderEndpoint = bdsmIdentitySettings.adultProviderEndpoint.ifBlank { "https://" },
+                    )
+
+                    else -> bdsmIdentitySettings
                 }
+                onBdsmIdentitySettingsChange(updatedSettings)
             }
             GlassCard(background = WarningPeach.copy(alpha = 0.18f), padding = 14.dp) {
-                Text("BDSM Mode Enabled", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("RolePlay Mode Enabled", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Text("This companion can support adult consent-based fantasy roleplay through chat. Boundaries, roles, and safewords will be established before roleplay begins.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
+            RoundedInputField(boundaries, onBoundariesChange, "What is your Fantasy?", minLines = 3)
             ToggleRow("I understand this mode is for consenting adults only.", bdsmIdentitySettings.adultConsentConfirmed, onBdsmConsentChange)
-            ToggleRow("Allow anatomical words", bdsmIdentitySettings.anatomicalLanguageAllowed, onAnatomicalLanguageAllowedChange)
+            ToggleRow("Allow anatomical words", bdsmIdentitySettings.anatomicalLanguageAllowed) { allowed ->
+                onAnatomicalLanguageAllowedChange(allowed)
+                if (allowed) showAdultPhraseSetup = true
+            }
             Text("Allows adult language preferences only when this adult mode is selected and consent is confirmed.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
-            RoundedInputField(
-                value = bdsmIdentitySettings.preferredAdultPhrases,
-                onValueChange = onPreferredAdultPhrasesChange,
-                label = "Preferred adult phrases",
-                minLines = 3,
-            )
-            Text("Saved privately with this companion and sent only when adult language preferences are enabled.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+            SecondarySoftButton("Edit preferred adult phrases", onClick = { showAdultPhraseSetup = true })
+            if (showAdultPhraseSetup) {
+                AlertDialog(
+                    onDismissRequest = { showAdultPhraseSetup = false },
+                    containerColor = CardDark,
+                    title = { Text("Preferred adult phrases", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("These phrases stay tied to this companion and are only sent when adult RolePlay mode is active and consent is confirmed.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                            RoundedInputField(
+                                value = bdsmIdentitySettings.preferredAdultPhrases,
+                                onValueChange = onPreferredAdultPhrasesChange,
+                                label = "Preferred adult phrases",
+                                minLines = 4,
+                            )
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { showAdultPhraseSetup = false }) { Text("Save", color = DeepRose) } },
+                    dismissButton = { TextButton(onClick = { showAdultPhraseSetup = false }) { Text("Close", color = TextMuted) } },
+                )
+            }
             HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
             ToggleRow("Use adult AI provider", bdsmIdentitySettings.adultProviderEnabled) { enabled ->
-                onAdultProviderEnabledChange(enabled)
-                if (enabled) showAdultProviderSetup = true
+                if (enabled) {
+                    if (providerName == "LunaKai Adult") selectAdultProvider("OpenRouter") else onAdultProviderEnabledChange(true)
+                    showAdultProviderSetup = true
+                } else {
+                    onAdultProviderEnabledChange(false)
+                }
             }
             Text(
-                "Routes adult-mode messages through the selected adult-compatible provider after the consent and safety gates pass.",
+                "Routes adult-mode messages through the selected provider after the consent and safety gates pass. LunaKai Adult uses your local Ollama model at home; OpenRouter or DeepSeek can be used away from home with an API key.",
                 color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp,
             )
+            ToggleRow("Use LunaKai Adult local model", providerName == "LunaKai Adult") { enabled ->
+                if (enabled) {
+                    selectAdultProvider("LunaKai Adult")
+                } else {
+                    selectAdultProvider("Gemini")
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SolidInputField(
-                    value = activeProviderKey,
-                    onValueChange = { key ->
-                        if (providerName == "DeepSeek") {
-                            deepSeekKey = key
-                            settingsContext.savePref("deepseek_api_key", key)
-                        } else {
-                            openRouterKey = key
-                            settingsContext.savePref("openrouter_api_key", key)
-                        }
-                    },
-                    label = "$providerName API key",
-                    placeholder = if (providerName == "DeepSeek") "sk-..." else "sk-or-v1-...",
-                    modifier = Modifier.weight(1f),
-                    visualTransformation = PasswordVisualTransformation(),
-                )
+                if (providerName == "LunaKai Adult") {
+                    MiniStateCard("LunaKai Adult", "Uses local Ollama model lunakai-ai-adult on your home Wi-Fi")
+                } else {
+                    SolidInputField(
+                        value = activeProviderKey,
+                        onValueChange = { key ->
+                            if (providerName == "DeepSeek") {
+                                deepSeekKey = key
+                                settingsContext.savePref("deepseek_api_key", key)
+                            } else {
+                                openRouterKey = key
+                                settingsContext.savePref("openrouter_api_key", key)
+                            }
+                        },
+                        label = "$providerName API key",
+                        placeholder = if (providerName == "DeepSeek") "sk-..." else "sk-or-v1-...",
+                        modifier = Modifier.weight(1f),
+                        visualTransformation = PasswordVisualTransformation(),
+                    )
+                }
                 SecondarySoftButton("Options", modifier = Modifier.width(112.dp), onClick = { showAdultProviderSetup = true })
             }
             MiniStateCard("Provider", providerName)
@@ -4129,23 +4449,12 @@ private fun RoleplayDetails(
                         deepSeekKey = key
                         settingsContext.savePref("deepseek_api_key", key)
                     },
-                    modelName = bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
+                    modelName = if (providerName == "LunaKai Adult") LUNAKAI_ADULT_MODEL else bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
                     onModelNameChange = onAdultProviderModelChange,
                     customEndpoint = bdsmIdentitySettings.adultProviderEndpoint,
                     onCustomEndpointChange = onAdultProviderEndpointChange,
-                    onProviderChoiceChange = { choice ->
-                        if (choice == "OpenRouter") {
-                            onAdultProviderEndpointChange("")
-                            if (bdsmIdentitySettings.adultProviderModel.startsWith("deepseek")) {
-                                onAdultProviderModelChange(AdultRoleplayRepository.DEFAULT_ADULT_MODEL)
-                            }
-                        } else if (choice == "DeepSeek") {
-                            onAdultProviderEndpointChange(AdultRoleplayRepository.DEEPSEEK_ENDPOINT)
-                            onAdultProviderModelChange(AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL)
-                        } else if (bdsmIdentitySettings.adultProviderEndpoint.isBlank()) {
-                            onAdultProviderEndpointChange("https://")
-                        }
-                    },
+                    onAdultProviderEnabledChange = onAdultProviderEnabledChange,
+                    onProviderChoiceChange = { choice -> selectAdultProvider(choice) },
                     onDismiss = { showAdultProviderSetup = false },
                 )
             }
@@ -4172,6 +4481,7 @@ private fun AdultProviderSetupDialog(
     onModelNameChange: (String) -> Unit,
     customEndpoint: String,
     onCustomEndpointChange: (String) -> Unit,
+    onAdultProviderEnabledChange: (Boolean) -> Unit,
     onProviderChoiceChange: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -4182,7 +4492,7 @@ private fun AdultProviderSetupDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "BDSM mode uses a separate provider after consent and safety checks. Use OpenRouter for adult-compatible roleplay, DeepSeek when you want that key/model, or a custom OpenAI-compatible server.",
+                    "Choose which AI provider powers adult private mode. LunaKai Adult uses your local Ollama model when you are home. OpenRouter or DeepSeek can be used away from home with an API key. Custom endpoint is for another OpenAI-compatible server.",
                     color = TextMuted,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -4190,41 +4500,61 @@ private fun AdultProviderSetupDialog(
                 SoftDropdown(
                     label = "Provider",
                     selected = providerName,
-                    options = listOf("OpenRouter", "DeepSeek", "Custom endpoint"),
+                    options = listOf("LunaKai Adult", "Gemini", "OpenRouter", "DeepSeek", "Custom endpoint"),
                     onSelected = onProviderChoiceChange,
                 )
-                SolidInputField(
-                    value = openRouterKey,
-                    onValueChange = onOpenRouterKeyChange,
-                    label = "OpenRouter API key",
-                    placeholder = "sk-or-v1-...",
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-                SolidInputField(
-                    value = deepSeekKey,
-                    onValueChange = onDeepSeekKeyChange,
-                    label = "DeepSeek API key",
-                    placeholder = "sk-...",
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-                SoftDropdown(
-                    label = "Adult AI model",
-                    selected = modelName,
-                    options = AdultRoleplayRepository.RECOMMENDED_MODELS,
-                    onSelected = onModelNameChange,
-                )
-                SolidInputField(
-                    value = customEndpoint,
-                    onValueChange = onCustomEndpointChange,
-                    label = "Custom endpoint",
-                    placeholder = "Leave blank for OpenRouter",
-                )
-                Text(
-                    "Custom endpoints are normalized automatically. Blank or openrouter.ai uses OpenRouter; api.deepseek.com uses DeepSeek.",
-                    color = TextMuted,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                )
+                if (providerName == "LunaKai Adult") {
+                    MiniStateCard("No API key needed", "Uses $LUNAKAI_LOCAL_ENDPOINT with model $LUNAKAI_ADULT_MODEL")
+                    SolidInputField(
+                        value = customEndpoint.ifBlank { LUNAKAI_LOCAL_ENDPOINT },
+                        onValueChange = onCustomEndpointChange,
+                        label = "LunaKai Adult local endpoint",
+                        placeholder = LUNAKAI_LOCAL_ENDPOINT,
+                    )
+                    SolidInputField(
+                        value = modelName.ifBlank { LUNAKAI_ADULT_MODEL },
+                        onValueChange = onModelNameChange,
+                        label = "LunaKai Adult model",
+                        placeholder = LUNAKAI_ADULT_MODEL,
+                    )
+                } else {
+                    if (providerName == "OpenRouter" || providerName == "Custom endpoint") {
+                        SolidInputField(
+                            value = openRouterKey,
+                            onValueChange = onOpenRouterKeyChange,
+                            label = "OpenRouter API key",
+                            placeholder = "sk-or-v1-...",
+                            visualTransformation = PasswordVisualTransformation(),
+                        )
+                    }
+                    if (providerName == "DeepSeek") {
+                        SolidInputField(
+                            value = deepSeekKey,
+                            onValueChange = onDeepSeekKeyChange,
+                            label = "DeepSeek API key",
+                            placeholder = "sk-...",
+                            visualTransformation = PasswordVisualTransformation(),
+                        )
+                    }
+                    SoftDropdown(
+                        label = "Adult AI model",
+                        selected = modelName,
+                        options = AdultRoleplayRepository.RECOMMENDED_MODELS,
+                        onSelected = onModelNameChange,
+                    )
+                    SolidInputField(
+                        value = customEndpoint,
+                        onValueChange = onCustomEndpointChange,
+                        label = "Custom endpoint",
+                        placeholder = "Leave blank for OpenRouter",
+                    )
+                    Text(
+                        "Custom endpoints are normalized automatically. Blank or openrouter.ai uses OpenRouter; api.deepseek.com uses DeepSeek.",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                    )
+                }
             }
         },
         confirmButton = {
@@ -4290,57 +4620,70 @@ private fun JournalScreen(
     onVideoStateChange: (String) -> Unit,
     onViewEntries: () -> Unit,
 ) {
+    var entryType by rememberSaveable { mutableStateOf(JournalEntryType.TEXT.name) }
+    var showTitlePrompt by rememberSaveable { mutableStateOf(false) }
+    var titleDraft by remember(title) { mutableStateOf(title) }
+    val entryTypes = JournalEntryType.values().map { it.label }
+    val moods = listOf("Calm", "Heavy", "Hopeful", "Anxious", "Tired", "Happy", "Restless", "Ambitious", "Inspired", "Intrigued", "In Love", "Resentful", "Jealous")
+
     GradientBackground {
         ScreenScroll {
-            SectionHeader("New entry", "Write, speak, or record what you want to save.")
+            SectionHeader("New entry", "Write, Speak or Video Record your entries")
             GlassCard {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SoftStatusChip("Mood: $mood", RosePink)
-                    SoftStatusChip("Storage: ${storage.label}", CalmBlue)
-                    SmallCircleButton("mic") {}
+                SoftDropdown("Mood", mood, moods) { onMoodChange(it) }
+                SoftDropdown("Entry type", JournalEntryType.valueOf(entryType).label, entryTypes) { label ->
+                    entryType = JournalEntryType.values().first { it.label == label }.name
+                    if (label == JournalEntryType.VIDEO.label) showTitlePrompt = true
                 }
-                RoundedInputField(title, onTitleChange, "Entry title")
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                    listOf("Calm", "Heavy", "Hopeful", "Anxious", "Tired").forEach { MoodChip(label = it, selected = mood == it, onClick = { onMoodChange(it) }) }
+                if (body.isNotBlank() || title.isNotBlank()) {
+                    RoundedInputField(title, onTitleChange, "Entry title")
                 }
-                Spacer(Modifier.height(12.dp))
-                RoundedInputField(body, onBodyChange, "Write what's on your heart...", minLines = 8)
-                Spacer(Modifier.height(16.dp))
-                GlassCard(background = Lavender.copy(alpha = 0.18f), padding = 14.dp) {
-                    Text("Voice journal", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text("Record voice entry. Transcription can connect later.", color = TextMuted)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SecondarySoftButton("Record Voice", modifier = Modifier.weight(1f), onClick = {})
-                        SecondarySoftButton("Transcribe Later", modifier = Modifier.weight(1f), onClick = {})
+                RoundedInputField(body, onBodyChange, "", minLines = 8)
+                GlassCard(background = Lavender.copy(alpha = 0.16f), padding = 14.dp) {
+                    Text("Journal capture", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Use one capture box for written, voice, video, and transcribed journal entries.", color = TextMuted)
+                    when (JournalEntryType.valueOf(entryType)) {
+                        JournalEntryType.TEXT -> Text("Write in the box above, then save below.", color = TextMuted)
+                        JournalEntryType.VOICE -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SecondarySoftButton("Start", modifier = Modifier.weight(1f), onClick = { onVideoStateChange("Voice recording") })
+                            SecondarySoftButton("Pause", modifier = Modifier.weight(1f), onClick = { onVideoStateChange("Voice paused") })
+                            SecondarySoftButton("Stop", modifier = Modifier.weight(1f), onClick = { onVideoStateChange("Voice stopped") })
+                        }
+                        JournalEntryType.VIDEO -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SecondarySoftButton("Record Video", modifier = Modifier.weight(1f), onClick = { showTitlePrompt = true; onVideoStateChange("Video recording requested") })
+                            SecondarySoftButton("End", modifier = Modifier.weight(1f), onClick = { showTitlePrompt = true; onVideoStateChange("Video ended") })
+                        }
                     }
-                }
-                GlassCard(background = CalmBlue.copy(alpha = 0.14f), padding = 14.dp) {
-                    Text("Video journal", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text("Status: $videoJournalState", color = TextMuted)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SecondarySoftButton("Start Recording", modifier = Modifier.weight(1f), onClick = { onVideoStateChange("Recording") })
-                        SecondarySoftButton("Stop", modifier = Modifier.weight(1f), onClick = { onVideoStateChange("Stopped") })
+                    MiniStateCard("Current location", storage.label)
+                    SoftDropdown("Change Location", storage.label, JournalStorage.values().map { it.label }) { selected ->
+                        JournalStorage.values().firstOrNull { it.label == selected }?.let(onStorageChange)
                     }
-                    PrimaryGradientButton("Save Video Entry", onClick = { onVideoStateChange("Saved video placeholder") })
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SecondarySoftButton("Device", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Device) })
-                        SecondarySoftButton("Cloud", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Cloud) })
-                        SecondarySoftButton("Both", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Both) })
-                    }
-                    Text("Model ready: videoEntryUri and users/{userId}/journal/video/ storage paths.", color = TextMuted, fontSize = 12.sp)
                 }
                 PrimaryGradientButton("Save Entry", onClick = { if (askEveryTime) onStorageSheet() })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SecondarySoftButton("Device", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Device) })
-                    SecondarySoftButton("Cloud", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Cloud) })
-                    SecondarySoftButton("Both", modifier = Modifier.weight(1f), onClick = { onStorageChange(JournalStorage.Both) })
-                }
-                SecondarySoftButton("Ask Every Time", onClick = onStorageSheet)
+                SecondarySoftButton("View Saved Entries", onClick = onViewEntries)
                 SecondarySoftButton("Ask Companion to Reflect", onClick = onReflect)
             }
-            PrimaryGradientButton("View Saved Entries", onClick = onViewEntries)
         }
+    }
+
+    if (showTitlePrompt) {
+        AlertDialog(
+            onDismissRequest = { showTitlePrompt = false },
+            containerColor = CardDark,
+            title = { Text("Add a title to this entry?", color = TextDark, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    RoundedInputField(titleDraft, { titleDraft = it }, "Entry title")
+                    Text("Choose Done to return to the recording box and save this entry.", color = TextMuted)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onTitleChange(titleDraft); showTitlePrompt = false }) { Text("Done", color = DeepRose) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTitlePrompt = false }) { Text("No title", color = TextMuted) }
+            },
+        )
     }
 }
 
@@ -4350,16 +4693,16 @@ private fun SavedJournalEntriesScreen(storage: JournalStorage) {
         JournalEntry(
             date = "April 30, 2026",
             mood = "Calm",
-            title = "Today I needed clarity",
-            preview = "I noticed that I feel steadier when I name what I need first.",
+            title = "Written entries",
+            preview = "Saved written journal entry folder.",
             storageLocation = storage,
             entryType = JournalEntryType.TEXT,
         ),
         JournalEntry(
             date = "April 29, 2026",
-            mood = "Heavy",
-            title = "Voice note after work",
-            preview = "A saved voice entry placeholder with later transcription support.",
+            mood = "Reflective",
+            title = "Voice entries",
+            preview = "Saved voice journal entry folder.",
             storageLocation = JournalStorage.Device,
             entryType = JournalEntryType.VOICE,
             voiceEntryUri = "local://voice-placeholder",
@@ -4367,12 +4710,11 @@ private fun SavedJournalEntriesScreen(storage: JournalStorage) {
         JournalEntry(
             date = "April 28, 2026",
             mood = "Hopeful",
-            title = "Video reflection",
-            preview = "A saved video journal placeholder ready for device or cloud storage.",
+            title = "Video entries",
+            preview = "Saved video journal entry folder.",
             storageLocation = JournalStorage.Both,
             entryType = JournalEntryType.VIDEO,
             videoEntryUri = "local://video-placeholder",
-            videoStoragePath = "users/{userId}/journal/video/video-placeholder",
         ),
     )
 
@@ -4403,24 +4745,103 @@ private fun WellnessBackButton(onBack: () -> Unit, label: String = "Back to Well
 
 @Composable
 private fun WellnessHubScreen(onNavigate: (AppRoute) -> Unit) {
+    var active by remember { mutableStateOf(false) }
+    var breathText by remember { mutableStateOf("Breathe in") }
+    var durationSeconds by rememberSaveable { mutableStateOf(60) }
+    var remainingSeconds by rememberSaveable { mutableStateOf(60) }
+
+    LaunchedEffect(active, durationSeconds) {
+        if (active) {
+            remainingSeconds = durationSeconds
+            while (active && remainingSeconds > 0) {
+                breathText = when ((durationSeconds - remainingSeconds) % 12) {
+                    in 0..3 -> "Breathe in"
+                    in 4..5 -> "Hold"
+                    else -> "Breathe out"
+                }
+                delay(1000)
+                remainingSeconds -= 1
+            }
+            active = false
+            breathText = "Breathe in"
+            remainingSeconds = durationSeconds
+        } else {
+            remainingSeconds = durationSeconds
+            breathText = "Breathe in"
+        }
+    }
+
     GradientBackground {
         ScreenScroll {
-            SectionHeader("Wellness", "Choose the kind of support you need right now.")
+            SectionHeader("Body Reset", "Come back to your body, one breath at a time.")
+            GlassCard {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf(60, 90, 120).forEach { seconds ->
+                            SecondarySoftButton(
+                                text = "${seconds}s",
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    durationSeconds = seconds
+                                    remainingSeconds = seconds
+                                    active = false
+                                    breathText = "Breathe in"
+                                },
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 18.dp)
+                            .size(if (active) 164.dp else 138.dp)
+                            .shadow(18.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(RosePink, Lavender, CalmBlue))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(breathText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                            Text("${remainingSeconds}s", color = Color.White.copy(alpha = 0.92f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp, modifier = Modifier.padding(top = 6.dp))
+                        }
+                    }
+                    Text("${durationSeconds}-second reset", color = TextMuted, modifier = Modifier.padding(top = 14.dp))
+                    PrimaryGradientButton(
+                        if (active) "Reset in Progress" else "Start ${durationSeconds}-Second Reset",
+                        onClick = {
+                            active = true
+                            remainingSeconds = durationSeconds
+                        },
+                        modifier = Modifier.padding(top = 14.dp),
+                    )
+                }
+            }
+            SectionHeader("Grounding Tools")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                QuickActionCard("5-4-3-2-1 Reset", "Name what you see, feel, hear, smell, and taste.", "reset", RosePink, Modifier.weight(1f)) {}
+                QuickActionCard("Body Scan", "Notice where tension is sitting.", "body", Lavender, Modifier.weight(1f)) {}
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                QuickActionCard("Soft Affirmation", "Give your mind something safe to hold.", "safe", CalmBlue, Modifier.weight(1f)) {}
+                QuickActionCard("Release Thought", "Write one thought and let it pass.", "free", WarningPeach, Modifier.weight(1f)) {}
+            }
+            GlassCard {
+                Text("You are safe in this moment.", color = TextDark, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text("You do not have to solve everything right now.", color = TextMuted, modifier = Modifier.padding(top = 8.dp))
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                QuickActionCard("Check-In", "Name how you feel right now.", "heart", Lavender, Modifier.weight(1f)) { onNavigate(AppRoute.CheckIn) }
+                QuickActionCard("Affirmations", "Hold a kinder thought.", "safe", SuccessGreen, Modifier.weight(1f)) { onNavigate(AppRoute.Affirmations) }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 QuickActionCard("Reflection", "Sort through what you feel.", "journal", RosePink, Modifier.weight(1f)) { onNavigate(AppRoute.Reflection) }
-                QuickActionCard("Grounding", "Come back to the present.", "safe", CalmBlue, Modifier.weight(1f)) { onNavigate(AppRoute.Grounding) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                QuickActionCard("Check-In", "Name your mood and need.", "heart", Lavender, Modifier.weight(1f)) { onNavigate(AppRoute.CheckIn) }
-                QuickActionCard("Breathing", "Use a soft nervous-system reset.", "reset", GoldAccent, Modifier.weight(1f)) { onNavigate(AppRoute.Breathing) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                QuickActionCard("Affirmations", "Hold a kinder thought.", "safe", SuccessGreen, Modifier.weight(1f)) { onNavigate(AppRoute.Affirmations) }
                 QuickActionCard("Fitness", "Move gently and track progress.", "heart", WarningPeach, Modifier.weight(1f)) { onNavigate(AppRoute.Fitness) }
             }
+            QuickActionCard("Journal", "Write, speak, or record privately.", "journal", GoldAccent, Modifier.fillMaxWidth(), centerContent = true) { onNavigate(AppRoute.Journal) }
         }
     }
 }
+
 @Composable
 private fun ReflectionScreen(onBack: () -> Unit, onSaveToJournal: () -> Unit) {
     val prompts = listOf(
@@ -4517,6 +4938,7 @@ private fun FitnessScreen(
     onGoalChange: (Float) -> Unit,
     onSelectWorkout: (String) -> Unit,
     onStartActive: () -> Unit,
+    onPauseActive: () -> Unit,
     onAddFiveMinutes: () -> Unit,
     onReset: () -> Unit,
     onCompleteWorkout: (Int) -> Unit,
@@ -4534,29 +4956,55 @@ private fun FitnessScreen(
     val progress = (minutesToday / goalMinutes.coerceAtLeast(1f)).coerceIn(0f, 1f)
     val context = LocalContext.current
     var trainerVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
-    var trainerVideoStatus by rememberSaveable { mutableStateOf("No trainer video recorded yet.") }
+    var pendingTrainerVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var trainerVideoStatus by rememberSaveable { mutableStateOf("Ready to record progress.") }
+    var showFreeWorkouts by rememberSaveable { mutableStateOf(false) }
     val trainerVideoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            val uri = result.data?.data
-            trainerVideoUri = uri?.toString()
-            trainerVideoStatus = if (uri != null) {
-                "Trainer video recorded and ready."
+            val uri = result.data?.data?.toString() ?: pendingTrainerVideoUri
+            trainerVideoUri = uri
+            trainerVideoStatus = if (!uri.isNullOrBlank()) {
+                "Progress video recorded and ready to share."
             } else {
-                "Video recorded. Camera app did not return a shareable URI."
+                "Video recorded, but no file location was returned."
             }
         } else {
             trainerVideoStatus = "Recording canceled."
         }
+        pendingTrainerVideoUri = null
     }
 
+    fun createTrainerVideoUri(): Uri? = runCatching {
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, "lunakai_progress_${System.currentTimeMillis()}.mp4")
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/LunaKai")
+            }
+        }
+        resolver.insert(collection, values)
+    }.getOrNull()
+
     fun recordTrainerVideo() {
+        val outputUri = createTrainerVideoUri()
         val intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE).apply {
             putExtra(MediaStore.EXTRA_DURATION_LIMIT, 90)
             putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
+            outputUri?.let {
+                putExtra(MediaStore.EXTRA_OUTPUT, it)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
         if (intent.resolveActivity(context.packageManager) == null) {
             trainerVideoStatus = "No camera app is available for recording."
         } else {
+            pendingTrainerVideoUri = outputUri?.toString()
             trainerVideoLauncher.launch(intent)
         }
     }
@@ -4567,13 +5015,13 @@ private fun FitnessScreen(
             Intent(Intent.ACTION_SEND).apply {
                 type = "video/*"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, "LUNAKAI fitness progress: ${activeWorkout.title}")
+                putExtra(Intent.EXTRA_TEXT, "LunaKai fitness progress: ${activeWorkout.title}")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         } else {
             Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "LUNAKAI fitness progress: ${activeWorkout.title} - ${formatDuration(totalSeconds)} total movement.")
+                putExtra(Intent.EXTRA_TEXT, "LunaKai fitness progress: ${activeWorkout.title} - ${formatDuration(totalSeconds)} total movement.")
             }
         }
         context.startActivity(Intent.createChooser(shareIntent, "Share fitness progress"))
@@ -4582,12 +5030,11 @@ private fun FitnessScreen(
     GradientBackground {
         ScreenScroll {
             WellnessBackButton(onBack)
-            SectionHeader("Fitness", "Track movement and choose free workouts.")
+            SectionHeader("Fitness", "Workout timer and progress booster.")
 
             GlassCard(background = CardAccent.copy(alpha = 0.94f)) {
-                Text("Today tracker", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Active workout: ${activeWorkout.title}", color = TextMuted)
-                Text(formatDuration(sessionSeconds), color = TextDark, fontSize = 34.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                Text("Workout Timer", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                Text(formatDuration(sessionSeconds), color = TextDark, fontSize = 34.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                 SoftStatusChip(if (timerRunning) "Stopwatch running" else "Ready to start", if (timerRunning) SuccessGreen else GoldAccent)
                 FitnessProgressBar(progress)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -4598,27 +5045,27 @@ private fun FitnessScreen(
                 Text("Daily movement goal: ${goalMinutes.toInt()} min", color = TextMuted)
                 Slider(value = goalMinutes, onValueChange = onGoalChange, valueRange = 5f..90f)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    SecondarySoftButton("Start Active", modifier = Modifier.weight(1f), onClick = onStartActive)
-                    SecondarySoftButton("+5 min", modifier = Modifier.weight(1f), onClick = onAddFiveMinutes)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SecondarySoftButton("Start", modifier = Modifier.fillMaxWidth(), onClick = onStartActive)
+                        SecondarySoftButton("Stop", modifier = Modifier.fillMaxWidth(), onClick = onReset)
+                    }
+                    SecondarySoftButton("Pause", modifier = Modifier.weight(1f), onClick = onPauseActive)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    SecondarySoftButton("Progress", modifier = Modifier.weight(1f), onClick = onProgress)
-                    SecondarySoftButton("Reset", modifier = Modifier.weight(1f), onClick = onReset)
-                }
-                PrimaryGradientButton("Mark Active Workout Complete") { onCompleteWorkout(activeWorkout.minutes) }
+                PrimaryGradientButton("Workout Complete") { onCompleteWorkout(activeWorkout.minutes) }
+                SecondarySoftButton("Progress", modifier = Modifier.fillMaxWidth(), onClick = onProgress)
                 MiniStateCard("Last completed", lastWorkoutTitle)
-                MiniStateCard("Total timed movement", formatDuration(totalSeconds))
+                MiniStateCard("Total movement", formatDuration(totalSeconds))
                 Text("This tracker is for general wellness and motivation, not medical advice.", color = TextMuted, fontSize = 12.sp)
             }
 
             GlassCard {
-                Text("AI trainer check-in", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Record a set, walk-through, or progress clip so a trainer mode can review form notes later and you can share progress.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
-                MiniStateCard("Video sample", trainerVideoStatus)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Text("Progress Booster", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Record a set, a walk through, or just want to keep your companions, friends and family up to date on your progress. Share your progress here.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     SecondarySoftButton("Record Video", modifier = Modifier.weight(1f), onClick = { recordTrainerVideo() })
                     SecondarySoftButton("Share Progress", modifier = Modifier.weight(1f), onClick = { shareTrainerProgress() })
                 }
+                Text(trainerVideoStatus, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
                 SecondarySoftButton("Attach to Trainer Review", onClick = {
                     trainerVideoStatus = if (trainerVideoUri != null) {
                         "Video attached for the next trainer review."
@@ -4628,13 +5075,15 @@ private fun FitnessScreen(
                 })
             }
 
-            SectionHeader("Free workouts", "No equipment needed. Choose what fits your energy.")
-            workouts.forEach { workout ->
-                FitnessWorkoutCard(
-                    workout = workout,
-                    selected = activeWorkout.title == workout.title,
-                    onStart = { onSelectWorkout(workout.title) },
-                )
+            SecondarySoftButton(if (showFreeWorkouts) "Hide Free Workouts" else "Free Workouts", onClick = { showFreeWorkouts = !showFreeWorkouts })
+            if (showFreeWorkouts) {
+                workouts.forEach { workout ->
+                    FitnessWorkoutCard(
+                        workout = workout,
+                        selected = activeWorkout.title == workout.title,
+                        onStart = { onSelectWorkout(workout.title) },
+                    )
+                }
             }
         }
     }
@@ -4733,7 +5182,7 @@ private fun FitnessProgressScreen(
             GlassCard {
                 Text("History summary", color = TextDark, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 MiniStateCard("Last completed", lastWorkoutTitle)
-                MiniStateCard("Total timed movement", formatDuration(totalSeconds))
+                MiniStateCard("Total movement", formatDuration(totalSeconds))
                 MiniStateCard("Total completed workouts", workoutsCompleted.toString())
                 Text("Future versions can sync this to Firestore under users/{userId}/fitnessProgress.", color = TextMuted, fontSize = 12.sp)
             }
@@ -4809,10 +5258,225 @@ private fun CompanionStateScreen(companion: CompanionProfile, onNavigate: (AppRo
                 Text("Support focus", color = TextMuted)
                 SupportFocusChips(companion.supportFocus)
             }
-            SecondarySoftButton("Change Personality", modifier = Modifier.fillMaxWidth(), onClick = { onNavigate(AppRoute.Personality) })
+            SecondarySoftButton("Change Companion", modifier = Modifier.fillMaxWidth(), onClick = { onNavigate(AppRoute.ActiveCompanionSettings) })
             PrimaryGradientButton("Start Chat", onClick = { onNavigate(AppRoute.TextChat) })
             SecondarySoftButton("Open Live Call", onClick = { onNavigate(AppRoute.LiveCompanionCall) })
         }
+    }
+}
+
+@Composable
+private fun ActiveCompanionSettingsScreen(
+    companion: CompanionProfile,
+    onCompanionChange: (CompanionProfile) -> Unit,
+    onBack: () -> Unit,
+) {
+    val genderOptions = listOf("Female", "Male", "Nonbinary", "Custom", "No preference")
+    val femaleVoiceOptions = listOf("Soft Female", "Warm Female", "Confident Female", "Sultry Calm Female", "Bright Female", "Deep Feminine", "Gentle Whisper Female")
+    val neutralVoiceOptions = listOf("Neutral Calm", "Neutral Bright", "Custom Voice Later")
+    val allowedVoiceOptions = when (companion.gender) {
+        "Female" -> femaleVoiceOptions
+        "Male" -> maleVoiceOptions()
+        else -> femaleVoiceOptions + maleVoiceOptions() + neutralVoiceOptions
+    }
+    val personalityTraitOptions = listOf("Protective", "Jealous", "Clingy", "Rude", "Playful", "Funny", "Ambitious", "Kind", "Sweet", "Provider")
+    val communicationCards = listOf(
+        "Gentle" to "Soft, nurturing, calming",
+        "Direct" to "Clear, honest, no overthinking",
+        "Deep" to "Reflective, emotional, thoughtful",
+        "Flirty" to "Warm, playful, and still respectful",
+        "Motivational" to "Pushes me with love",
+        "Soothing" to "Slow, calming, and tender",
+    )
+    val supportOptions = listOf("Stress", "Self-worth", "Confidence", "Grounding", "Journaling", "Reflection", "Relationships", "Creativity", "Fitness")
+    val roleplayOptions = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "RolePlay")
+    val characterModes = listOf(
+        "Best Friend" to "Supportive, loyal, honest, and emotionally present.",
+        "Romantic Partner" to "Affectionate, attentive, emotionally close, and caring.",
+        "The Opps" to "A slight hater who indirectly pushes you toward the things you think you can't do.",
+        "Assistant" to "Helpful, organized, focused, and practical.",
+    )
+    var openSection by remember { mutableStateOf<String?>("Basic Info") }
+    var showRolePlaySetup by remember { mutableStateOf(false) }
+    var traitLimitMessage by remember { mutableStateOf<String?>(null) }
+    fun toggle(section: String) { openSection = if (openSection == section) null else section }
+
+    GradientBackground {
+        ScreenScroll {
+            CompanionImageSquare(companion)
+
+            SettingsAccordionSection(
+                title = "Basic Info",
+                subtitle = "Name, identity, zodiac sign, and description",
+                expanded = openSection == "Basic Info",
+                onToggle = { toggle("Basic Info") },
+            ) {
+                RoundedInputField(companion.name, { onCompanionChange(companion.copy(name = it)) }, "Companion name")
+                SoftDropdown("Identity", companion.gender.ifBlank { "No preference" }, genderOptions) { onCompanionChange(companion.copy(gender = it, voice = voiceForGender(it, companion.voice))) }
+                SoftDropdown("Astrological sign", companion.zodiacSign ?: "No sign preference", listOf("Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces", "No sign preference")) { sign ->
+                    onCompanionChange(companion.copy(zodiacSign = sign))
+                }
+                RoundedInputField(companion.shortDescription, { onCompanionChange(companion.copy(shortDescription = it)) }, "Short description", minLines = 2)
+            }
+
+            SettingsAccordionSection(
+                title = "Voice & Character",
+                subtitle = "Voice and character mode",
+                expanded = openSection == "Voice & Character",
+                onToggle = { toggle("Voice & Character") },
+            ) {
+                SoftDropdown("Voice settings", companion.voice.ifBlank { allowedVoiceOptions.first() }, allowedVoiceOptions) { voice -> onCompanionChange(companion.copy(voice = voice)) }
+                MiniStateCard("Selected sound", voicePreviewDescription(companion.voice.ifBlank { allowedVoiceOptions.first() }))
+                Text("Use this dropdown to choose the companion voice. Each option has its own pitch, speed, and live voice mapping where the provider supports it.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                CharacterModeGrid(characterModes, companion.characterMode) { mode -> onCompanionChange(companion.copy(characterMode = mode)) }
+            }
+
+            SettingsAccordionSection(
+                title = "Personality Traits",
+                subtitle = "Choose up to 4 active companion traits",
+                expanded = openSection == "Personality Traits",
+                onToggle = { toggle("Personality Traits") },
+            ) {
+                CheckboxOptionGrid(
+                    options = personalityTraitOptions,
+                    selected = companion.personalityTraits.toSet(),
+                    onToggle = { option ->
+                        val selected = option in companion.personalityTraits
+                        if (selected) {
+                            traitLimitMessage = null
+                            onCompanionChange(companion.copy(personalityTraits = companion.personalityTraits - option))
+                        } else if (companion.personalityTraits.size >= 4) {
+                            traitLimitMessage = "You can choose up to 4 personality traits."
+                        } else {
+                            traitLimitMessage = null
+                            onCompanionChange(companion.copy(personalityTraits = companion.personalityTraits + option))
+                        }
+                    },
+                )
+                traitLimitMessage?.let { Text(it, color = WarningPeach, fontWeight = FontWeight.SemiBold) }
+            }
+
+            SettingsAccordionSection(
+                title = "Communication Style",
+                subtitle = "Choose how the active companion talks",
+                expanded = openSection == "Communication Style",
+                onToggle = { toggle("Communication Style") },
+            ) {
+                val selectedCommunicationStyles = companion.communicationStyles.filter { it.isNotBlank() }.toSet()
+                CheckboxOptionGrid(
+                    options = communicationCards.map { it.first },
+                    selected = selectedCommunicationStyles,
+                    onToggle = { option ->
+                        val next = if (option in selectedCommunicationStyles) selectedCommunicationStyles - option else selectedCommunicationStyles + option
+                        val nextList = next.ifEmpty { setOf("Gentle") }.toList()
+                        onCompanionChange(companion.copy(communicationStyles = nextList, communicationStyle = nextList.first()))
+                    },
+                    descriptions = communicationCards.toMap(),
+                )
+            }
+
+            SettingsAccordionSection(
+                title = "Support Focus",
+                subtitle = "Choose what the active companion supports",
+                expanded = openSection == "Support Focus",
+                onToggle = { toggle("Support Focus") },
+            ) {
+                CheckboxOptionGrid(
+                    options = supportOptions,
+                    selected = companion.supportFocus,
+                    onToggle = { option ->
+                        val checked = option in companion.supportFocus
+                        val next = if (checked) companion.supportFocus - option else companion.supportFocus + option
+                        onCompanionChange(companion.copy(supportFocus = next))
+                    },
+                )
+                SupportFocusContentSections(companion.supportFocus)
+            }
+
+            SettingsAccordionSection(
+                title = "Interactive Settings",
+                subtitle = "RolePlay, monologue, athletic, or wellness interaction features",
+                expanded = openSection == "Interactive Settings",
+                onToggle = { toggle("Interactive Settings") },
+            ) {
+                val selectedRoleplayStyles = companion.roleplayStyles.toSet()
+                CheckboxOptionGrid(
+                    options = roleplayOptions,
+                    selected = selectedRoleplayStyles,
+                    onToggle = { option ->
+                        val next = if (option in selectedRoleplayStyles) selectedRoleplayStyles - option else selectedRoleplayStyles + option
+                        val selectingRolePlay = option == "RolePlay" && option !in selectedRoleplayStyles
+                        val nextList = next.toList()
+                        val primaryRoleplayStyle = if (nextList.isEmpty()) "" else if (option in nextList) option else nextList.first()
+                        val nextSettings = if (option == "RolePlay" && option in selectedRoleplayStyles) {
+                            companion.bdsmIdentitySettings.copy(enabled = false, adultConsentConfirmed = false)
+                        } else {
+                            companion.bdsmIdentitySettings
+                        }
+                        onCompanionChange(companion.copy(
+                            roleplayEnabled = nextList.isNotEmpty(),
+                            roleplayStyles = nextList,
+                            roleplayStyle = primaryRoleplayStyle,
+                            bdsmIdentitySettings = nextSettings,
+                        ))
+                        if (selectingRolePlay) showRolePlaySetup = true
+                    },
+                )
+                if (companion.roleplayStyles.any { it == "Monologue Practice" }) {
+                    GlassCard(background = CalmBlue.copy(alpha = 0.16f), padding = 12.dp) {
+                        Text("Acting Partner", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text("Paste or upload a script in chat. Your companion will adapt demeanor, read opposite lines, cue the student, and give feedback on pacing, emotion, breath, clarity, and delivery.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                    }
+                }
+                if (companion.roleplayStyles.any { it == "RolePlay" || it == "BDSM" }) {
+                    MiniStateCard("RolePlay", if (companion.bdsmIdentitySettings.enabled) "BDSM Adult Sexual Play enabled" else "RolePlay selected. Setup opens when RolePlay is selected.")
+                }
+            }
+
+            PrimaryGradientButton("Save Companion Settings", onClick = onBack)
+        }
+    }
+
+    if (showRolePlaySetup) {
+        AlertDialog(
+            onDismissRequest = { showRolePlaySetup = false },
+            containerColor = CardDark,
+            title = { Text("RolePlay Setup", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Use this space to describe the interaction you want your companion to help build. Adult Sexual Play requires BDSM to be enabled and consenting-adults-only confirmation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                    RoundedInputField(
+                        value = companion.safeBoundaries,
+                        onValueChange = { onCompanionChange(companion.copy(safeBoundaries = it)) },
+                        label = "What is your Fantasy?",
+                        minLines = 4,
+                    )
+                    ToggleRow("BDSM enables Adult Sexual Play", companion.bdsmIdentitySettings.enabled) { enabled ->
+                        onCompanionChange(companion.copy(bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(enabled = enabled)))
+                    }
+                    if (companion.bdsmIdentitySettings.enabled) {
+                        GlassCard(background = WarningPeach.copy(alpha = 0.16f), padding = 12.dp) {
+                            Text("BDSM instructions", color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Text("This mode is for consenting adults only. Set boundaries first, use stop and pause words, and stop immediately if limits are reached.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+                        }
+                        ToggleRow("I confirm this is consenting adults only.", companion.bdsmIdentitySettings.adultConsentConfirmed) { confirmed ->
+                            onCompanionChange(companion.copy(bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultConsentConfirmed = confirmed)))
+                        }
+                        ToggleRow("Allow anatomical words", companion.bdsmIdentitySettings.anatomicalLanguageAllowed) { allowed ->
+                            onCompanionChange(companion.copy(bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(anatomicalLanguageAllowed = allowed)))
+                        }
+                        RoundedInputField(
+                            value = companion.bdsmIdentitySettings.preferredAdultPhrases,
+                            onValueChange = { phrases -> onCompanionChange(companion.copy(bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(preferredAdultPhrases = phrases))) },
+                            label = "Preferred adult phrases and speech patterns",
+                            minLines = 4,
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showRolePlaySetup = false }) { Text("Save", color = DeepRose) } },
+            dismissButton = { TextButton(onClick = { showRolePlaySetup = false }) { Text("Close", color = TextMuted) } },
+        )
     }
 }
 
@@ -4830,6 +5494,7 @@ private fun PreferencesScreen(
     onAskEveryTimeChange: (Boolean) -> Unit,
     onHideDisclaimerChange: (Boolean) -> Unit,
     onShowDisclaimerChange: (Boolean) -> Unit,
+    onCompanionChange: (CompanionProfile) -> Unit,
     onNavigate: (AppRoute) -> Unit,
     onProfileInfo: () -> Unit,
     onSignOut: () -> Unit,
@@ -4852,8 +5517,26 @@ private fun PreferencesScreen(
     var companionNotificationsEnabled by remember { mutableStateOf(context.prefBoolean("settings_companion_notifications_enabled", true)) }
     var notificationStyle by remember { mutableStateOf(context.prefString("settings_notification_style", "Calculated from character preferences")) }
     var notificationUrgency by remember { mutableStateOf(context.prefString("settings_notification_urgency", "Calculated from character preferences")) }
+    var globalAiProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
+    var globalAiEndpoint by remember { mutableStateOf(context.prefString("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)) }
+    var globalAiModel by remember { mutableStateOf(context.prefString("global_ai_model", LUNAKAI_LOCAL_MODEL)) }
+    var adminProviderOptionsRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
+    val allowedAiProviders = parseProviderOptions(adminProviderOptionsRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
+    var showProviderDialog by remember { mutableStateOf(false) }
     val accountEmail = currentFirebaseEmail() ?: "Not available"
     var openSettingsSection by remember { mutableStateOf<String?>(null) }
+    var showActiveRolePlaySetup by remember { mutableStateOf(false) }
+    val activeRoleplayOptions = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "RolePlay")
+
+    LaunchedEffect(adminProviderOptionsRaw, globalAiProvider) {
+        if (allowedAiProviders.isNotEmpty() && globalAiProvider !in allowedAiProviders) {
+            val fallbackProvider = allowedAiProviders.first()
+            globalAiProvider = fallbackProvider
+            globalAiEndpoint = endpointForProvider(fallbackProvider, globalAiEndpoint)
+            globalAiModel = modelForProvider(fallbackProvider)
+        }
+    }
+
     fun toggleSection(section: String) {
         openSettingsSection = if (openSettingsSection == section) null else section
     }
@@ -4876,6 +5559,9 @@ private fun PreferencesScreen(
         companionNotificationsEnabled,
         notificationStyle,
         notificationUrgency,
+        globalAiProvider,
+        globalAiEndpoint,
+        globalAiModel,
     ) {
         context.savePref("settings_voice_journal_enabled", voiceJournalEnabled)
         context.savePref("settings_memory_enabled", memoryEnabled)
@@ -4894,17 +5580,63 @@ private fun PreferencesScreen(
         context.savePref("settings_companion_notifications_enabled", companionNotificationsEnabled)
         context.savePref("settings_notification_style", notificationStyle)
         context.savePref("settings_notification_urgency", notificationUrgency)
+        context.savePref("global_ai_provider", globalAiProvider)
+        context.savePref("global_ai_endpoint", globalAiEndpoint)
+        context.savePref("global_ai_model", globalAiModel)
     }
 
     GradientBackground {
         ScreenScroll {
             Text("Tap a category to view or change its options.", color = TextMuted, fontSize = 15.sp)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                PrimaryGradientButton(
-                    "Voice & Live Settings",
-                    modifier = Modifier.weight(1f),
-                    onClick = { onNavigate(AppRoute.VoiceLiveSettings) },
+            SettingsAccordionSection(
+                title = "Voice & Chat Settings",
+                subtitle = "Voice, microphone, storage, and chat memory controls.",
+                expanded = openSettingsSection == "Voice & Chat Settings",
+                onToggle = { toggleSection("Voice & Chat Settings") },
+            ) {
+                SecondarySoftButton("Open Voice & Chat Settings", onClick = { onNavigate(AppRoute.VoiceLiveSettings) })
+                MiniStateCard("Chat storage", defaultChatStorage.label)
+                SecondarySoftButton("Delete companion chat memory", onClick = { })
+            }
+
+            SettingsAccordionSection(
+                title = "AI Provider Settings",
+                subtitle = "Current provider: $globalAiProvider · $globalAiModel",
+                expanded = openSettingsSection == "AI Provider Settings",
+                onToggle = { toggleSection("AI Provider Settings") },
+            ) {
+                Text("Use LunaKai Adult at home. Admin Control Center decides which providers are available and which provider is active app-wide.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                SoftDropdown(
+                    label = "Active AI provider",
+                    selected = globalAiProvider,
+                    options = allowedAiProviders,
+                    onSelected = { provider ->
+                        globalAiProvider = provider
+                        globalAiEndpoint = endpointForProvider(provider, globalAiEndpoint)
+                        globalAiModel = modelForProvider(provider)
+                        if (provider != "LunaKai Adult" && provider != "Gemini") showProviderDialog = true
+                    },
+                )
+                MiniStateCard("Endpoint", globalAiEndpoint)
+                MiniStateCard("Model", globalAiModel)
+                SecondarySoftButton("Provider options", onClick = { showProviderDialog = true })
+            }
+
+            if (showProviderDialog) {
+                GlobalProviderSetupDialog(
+                    providerOptions = allowedAiProviders,
+                    providerName = globalAiProvider,
+                    endpoint = globalAiEndpoint,
+                    model = globalAiModel,
+                    onProviderChange = { provider ->
+                        globalAiProvider = provider
+                        globalAiEndpoint = endpointForProvider(provider, globalAiEndpoint)
+                        globalAiModel = modelForProvider(provider)
+                    },
+                    onEndpointChange = { globalAiEndpoint = it },
+                    onModelChange = { globalAiModel = it },
+                    onDismiss = { showProviderDialog = false },
                 )
             }
 
@@ -4929,6 +5661,7 @@ private fun PreferencesScreen(
             ) {
                 MiniStateCard("Current companion", companion.name)
                 MiniStateCard("Voice", companion.voice)
+                SecondarySoftButton("Companion Settings", modifier = Modifier.fillMaxWidth(), onClick = { onNavigate(AppRoute.ActiveCompanionSettings) })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SecondarySoftButton("Change", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.Companions) })
                     SecondarySoftButton("Create New", modifier = Modifier.weight(1f), onClick = { onNavigate(AppRoute.Personality) })
@@ -4937,17 +5670,60 @@ private fun PreferencesScreen(
                 SecondarySoftButton("View Companion State", onClick = { onNavigate(AppRoute.CompanionState) })
             }
 
-            SettingsAccordionSection(
-                title = "Companion Customization",
-                subtitle = "${companion.gender} · ${companion.communicationStyle} · ${companion.avatarType}",
-                expanded = openSettingsSection == "Companion Customization",
-                onToggle = { toggleSection("Companion Customization") },
-            ) {
-                MiniStateCard("Companion photo", companion.avatarType)
-                MiniStateCard("Identity", companion.gender)
-                MiniStateCard("Roleplay", if (companion.roleplayEnabled) "Enabled" else "Disabled")
-                MiniStateCard("Communication style", companion.communicationStyle)
-                SecondarySoftButton("Edit Companion", onClick = { onNavigate(AppRoute.Personality) })
+            if (showActiveRolePlaySetup) {
+                AlertDialog(
+                    onDismissRequest = { showActiveRolePlaySetup = false },
+                    containerColor = CardDark,
+                    title = { Text("RolePlay Setup", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Use this space to describe the interaction you want your companion to help build. Adult Sexual Play requires BDSM to be enabled and consenting-adults-only confirmation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                            RoundedInputField(
+                                value = companion.safeBoundaries,
+                                onValueChange = { onCompanionChange(companion.copy(safeBoundaries = it)) },
+                                label = "What is your Fantasy?",
+                                minLines = 4,
+                            )
+                            ToggleRow("BDSM enables Adult Sexual Play", companion.bdsmIdentitySettings.enabled) { enabled ->
+                                onCompanionChange(companion.copy(
+                                    bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(enabled = enabled),
+                                ))
+                            }
+                            if (companion.bdsmIdentitySettings.enabled) {
+                                GlassCard(background = WarningPeach.copy(alpha = 0.16f), padding = 12.dp) {
+                                    Text("BDSM instructions", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                    Text("This mode is for consenting adults only. Set boundaries first, use stop and pause words, and stop immediately if limits are reached.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+                                }
+                                ToggleRow("I confirm this is consenting adults only.", companion.bdsmIdentitySettings.adultConsentConfirmed) { confirmed ->
+                                    onCompanionChange(companion.copy(
+                                        bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(adultConsentConfirmed = confirmed),
+                                    ))
+                                }
+                                ToggleRow("Allow anatomical words", companion.bdsmIdentitySettings.anatomicalLanguageAllowed) { allowed ->
+                                    onCompanionChange(companion.copy(
+                                        bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(anatomicalLanguageAllowed = allowed),
+                                    ))
+                                }
+                                RoundedInputField(
+                                    value = companion.bdsmIdentitySettings.preferredAdultPhrases,
+                                    onValueChange = { phrases ->
+                                        onCompanionChange(companion.copy(
+                                            bdsmIdentitySettings = companion.bdsmIdentitySettings.copy(preferredAdultPhrases = phrases),
+                                        ))
+                                    },
+                                    label = "Preferred adult phrases and speech patterns",
+                                    minLines = 4,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showActiveRolePlaySetup = false }) { Text("Save", color = DeepRose) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showActiveRolePlaySetup = false }) { Text("Close", color = TextMuted) }
+                    },
+                )
             }
 
             SettingsAccordionSection(
@@ -4978,16 +5754,17 @@ private fun PreferencesScreen(
                 expanded = openSettingsSection == "Chat Settings",
                 onToggle = { toggleSection("Chat Settings") },
             ) {
-                Text("Choose where text chat messages are stored after Gemini replies.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
-                ChatStorage.entries.forEach { storage ->
-                    SelectableInfoCard(
-                        title = storage.label,
-                        body = storage.body,
-                        selected = defaultChatStorage == storage,
-                    ) {
-                        onChatStorageChange(storage)
-                    }
-                }
+                Text("Choose where text chat messages are stored after LunaKai AI replies.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                SoftDropdown(
+                    label = "Text chat message storage",
+                    selected = defaultChatStorage.label,
+                    options = ChatStorage.entries.map { it.label },
+                    onSelected = { label -> ChatStorage.entries.firstOrNull { it.label == label }?.let(onChatStorageChange) },
+                )
+                MiniStateCard("Device only", "Local phone database source")
+                MiniStateCard("Personal storage only", "Firebase user chat path")
+                MiniStateCard("Device + personal storage", "Local phone + Firebase user chat path")
+                SecondarySoftButton("Delete companion chat memory", onClick = { })
             }
 
             SettingsAccordionSection(
@@ -5072,7 +5849,7 @@ private fun PreferencesScreen(
                     options = listOf("Calculated from character preferences", "Soft only", "Normal", "High urgency"),
                     onSelected = { notificationUrgency = it },
                 )
-                Text("LUNAKAI uses these choices in the background with the active companion's traits, support focus, communication style, and character mode so notifications feel personal without showing the calculation here.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("LunaKai uses these choices in the background with the active companion's traits, support focus, communication style, and character mode so notifications feel personal without showing the calculation here.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 SecondarySoftButton("Advanced Notification Settings", onClick = { onNavigate(AppRoute.NotificationSettings) })
             }
 
@@ -5178,6 +5955,7 @@ private fun ProfileInfoScreen(
     onNotificationPreferencesChange: (String) -> Unit,
     onCloudSyncPreferenceChange: (Boolean) -> Unit,
     onSave: () -> Unit,
+    onAdminClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -5217,7 +5995,6 @@ private fun ProfileInfoScreen(
                 MiniStateCard("Default companion", defaultCompanion)
                 RoundedInputField(notificationPreferences, onNotificationPreferencesChange, "Notification preferences", minLines = 2)
                 ToggleRow("Cloud sync preference", cloudSyncPreference, onCloudSyncPreferenceChange)
-                Text("Firestore-ready path: users/{userId}/profile", color = TextMuted, fontSize = 12.sp)
             }
             PrimaryGradientButton("Save Profile", onClick = onSave)
         }
@@ -5294,38 +6071,44 @@ private fun CustomizeCompanionScreen(
                 RoundedInputField(backstory, { backstory = it }, "Backstory idea", minLines = 3)
                 RoundedInputField(vibe, { vibe = it }, "Vibe / aesthetic", minLines = 2)
             }
-            SectionHeader("Characteristics")
+            SectionHeader("Emo Intel", "Trait intensity is measured from 0 to 100.")
             GlassCard {
-                CheckboxOptionGrid(characteristicOptions, characteristics, onToggle = { option ->
-                    characteristics = if (option in characteristics) characteristics - option else characteristics + option
-                })
-            }
-            SectionHeader("Personality traits", "Choose up to 4.")
-            GlassCard {
-                CheckboxOptionGrid(traitOptions, traits, onToggle = { option ->
-                    if (option in traits) {
-                        traits = traits - option
-                        traitMessage = null
-                    } else if (traits.size >= 4) {
-                        traitMessage = "You can choose up to 4 personality traits."
-                    } else {
-                        traits = traits + option
-                        traitMessage = null
+                Text("Move each scale to shape the companion's emotional intelligence and personality intensity.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                (characteristicOptions + traitOptions).distinct().take(18).forEach { option ->
+                    val selected = option in characteristics || option in traits
+                    var intensity by remember(option) { mutableStateOf(if (selected) 65f else 0f) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Text(option, color = TextDark, modifier = Modifier.weight(0.9f), fontWeight = FontWeight.SemiBold)
+                        Slider(
+                            value = intensity,
+                            onValueChange = { value ->
+                                intensity = value
+                                if (value > 0f) {
+                                    characteristics = characteristics + option
+                                    traits = (traits + option).take(10).toSet()
+                                } else {
+                                    characteristics = characteristics - option
+                                    traits = traits - option
+                                }
+                            },
+                            valueRange = 0f..100f,
+                            modifier = Modifier.weight(1.5f),
+                        )
+                        Text(intensity.toInt().toString(), color = TextMuted, modifier = Modifier.width(34.dp), textAlign = TextAlign.End)
                     }
-                })
-                traitMessage?.let { Text(it, color = WarningPeach, fontWeight = FontWeight.SemiBold) }
+                }
             }
             SectionHeader("Astrological energy")
             GlassCard {
                 SoftDropdown("Companion zodiac energy", zodiac, zodiacOptions) { zodiac = it }
             }
-            SectionHeader("Communication energy")
+            SectionHeader("Communication style")
             GlassCard {
                 CheckboxOptionGrid(energyOptions, communicationEnergy, onToggle = { option ->
                     communicationEnergy = if (option in communicationEnergy) communicationEnergy - option else communicationEnergy + option
                 })
             }
-            SectionHeader("Role / interaction style")
+            SectionHeader("Interactive Settings")
             GlassCard {
                 CheckboxOptionGrid(interactionOptions, interactionStyle, onToggle = { option ->
                     interactionStyle = if (option in interactionStyle) interactionStyle - option else interactionStyle + option
@@ -5378,7 +6161,10 @@ private fun CustomizeCompanionScreen(
 }
 
 @Composable
-private fun AccountSettingsScreen(onSignOut: () -> Unit) {
+private fun AccountSettingsScreen(
+    onSignOut: () -> Unit,
+    onAdminClick: () -> Unit = {},
+) {
     val accountEmail = currentFirebaseEmail() ?: "Not available"
     GradientBackground {
         ScreenScroll {
@@ -5387,11 +6173,10 @@ private fun AccountSettingsScreen(onSignOut: () -> Unit) {
                 Text("Signed in as", color = TextMuted)
                 Text(accountEmail, color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 SecondarySoftButton("Manage Account", onClick = {})
+                if (accountEmail.equals(ADMIN_EMAIL, ignoreCase = true)) {
+                    SecondarySoftButton("Admin Settings", onClick = onAdminClick)
+                }
                 SecondarySoftButton("Sign Out", onClick = onSignOut)
-            }
-            GlassCard {
-                Text("Firebase Auth Ready", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("This screen is ready to connect to Firebase Auth for email, password, account deletion, and sign-out flows.", color = TextMuted)
             }
         }
     }
@@ -5406,12 +6191,18 @@ private fun VoiceLiveSettingsScreen(
     onLiveSettings: () -> Unit,
 ) {
     val context = LocalContext.current
-    fun settingKey(name: String) = "voice_${companion.id}_$name"
+    fun settingKey(name: String) = voiceSettingKey(companion.id, name)
     var voiceReplies by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("voiceReplies"), true)) }
     var microphone by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("microphone"), true)) }
     var speaker by remember(companion.id) { mutableStateOf(context.prefBoolean(settingKey("speaker"), true)) }
     var voiceSpeed by remember(companion.id) { mutableStateOf(context.prefString(settingKey("voiceSpeed"), "Normal")) }
     var answerStyle by remember(companion.id) { mutableStateOf(context.prefString(settingKey("answerStyle"), "Answer with voice and text")) }
+    var answerPhrases by remember(companion.id) { mutableStateOf(context.prefString(settingKey("answerPhrases"), DEFAULT_CALL_ANSWER_PHRASES)) }
+    var ringtoneChoice by remember(companion.id) { mutableStateOf(context.prefString(settingKey("ringtoneChoice"), CALL_RINGTONE_OPTIONS.first())) }
+    var ringtoneUri by remember(companion.id) { mutableStateOf(context.prefString(settingKey("ringtoneUri"), "")) }
+    var notificationSoundChoice by remember(companion.id) { mutableStateOf(context.prefString(settingKey("notificationSoundChoice"), "LunaKai soft chime")) }
+    var notificationSoundUri by remember(companion.id) { mutableStateOf(context.prefString(settingKey("notificationSoundUri"), "")) }
+    var answerUrgency by remember(companion.id) { mutableStateOf(context.prefString(settingKey("answerUrgency"), CALL_URGENCY_OPTIONS.first())) }
     var wakeAssistantId by remember(companion.id) {
         mutableStateOf(
             context.prefString("voice_wake_assistant_id", wakeAssistantIdFor(companion))
@@ -5474,6 +6265,46 @@ private fun VoiceLiveSettingsScreen(
             trainingStatus = "Microphone permission is needed before voice training can record a sample."
         }
     }
+    val ringtonePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val pickedUri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            ringtoneUri = pickedUri?.toString().orEmpty()
+            ringtoneChoice = if (pickedUri == null) "Silent" else "Device ringtone"
+        }
+    }
+    val notificationPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val pickedUri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            notificationSoundUri = pickedUri?.toString().orEmpty()
+            notificationSoundChoice = if (pickedUri == null) "Silent" else "Device notification"
+        }
+    }
+    fun launchRingtonePicker() {
+        val existingUri = ringtoneUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        ringtonePickerLauncher.launch(
+            Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_RINGTONE)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Live call ringtone")
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existingUri)
+            },
+        )
+    }
+    fun launchNotificationPicker() {
+        val existingUri = notificationSoundUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        notificationPickerLauncher.launch(
+            Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Notification chime")
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existingUri)
+            },
+        )
+    }
     fun startVoiceTrainingSample() {
         if (!context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
             trainingStatus = "Allow microphone access to train ${wakeAssistantName(wakeAssistantId)}."
@@ -5502,6 +6333,12 @@ private fun VoiceLiveSettingsScreen(
         speaker,
         voiceSpeed,
         answerStyle,
+        answerPhrases,
+        ringtoneChoice,
+        ringtoneUri,
+        notificationSoundChoice,
+        notificationSoundUri,
+        answerUrgency,
         wakeAssistantId,
         wakePhraseEnabled,
         audioSource,
@@ -5516,6 +6353,14 @@ private fun VoiceLiveSettingsScreen(
         context.savePref(settingKey("speaker"), speaker)
         context.savePref(settingKey("voiceSpeed"), voiceSpeed)
         context.savePref(settingKey("answerStyle"), answerStyle)
+        context.savePref(settingKey("answerPhrases"), answerPhrases)
+        context.savePref(settingKey("ringtoneChoice"), ringtoneChoice)
+        context.savePref(settingKey("ringtoneUri"), ringtoneUri)
+        context.savePref(settingKey("notificationSoundChoice"), notificationSoundChoice)
+        context.savePref(settingKey("notificationSoundUri"), notificationSoundUri)
+        context.savePref(settingKey("answerUrgency"), answerUrgency)
+        context.savePref("settings_notification_sound", notificationSoundChoice)
+        context.savePref("settings_notification_sound_uri", notificationSoundUri)
         context.savePref("voice_wake_assistant_id", wakeAssistantId)
         context.savePref(wakeSettingKey("wakePhraseEnabled"), wakePhraseEnabled)
         context.savePref(wakeSettingKey("audioSource"), audioSource)
@@ -5526,16 +6371,18 @@ private fun VoiceLiveSettingsScreen(
         context.savePref(wakeSettingKey("voiceSensitivity"), voiceSensitivity)
     }
 
+    val voicePreviewScope = rememberCoroutineScope()
     var voicePreviewReady by remember { mutableStateOf(false) }
-    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to hear a preview.") }
+    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to hear a device preview.") }
     var voicePreviewEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+
     DisposableEffect(context) {
         var initializedEngine: TextToSpeech? = null
         val engine = TextToSpeech(context) { status ->
             voicePreviewReady = status == TextToSpeech.SUCCESS
             if (status == TextToSpeech.SUCCESS) {
                 initializedEngine?.language = Locale.US
-                voicePreviewStatus = "Voice preview is ready."
+                voicePreviewStatus = "Voice preview is ready. Live listening stays off until you start a call."
             } else {
                 voicePreviewStatus = "Voice preview is not available on this device yet."
             }
@@ -5548,26 +6395,36 @@ private fun VoiceLiveSettingsScreen(
             voicePreviewEngine = null
         }
     }
+
     fun playVoicePreview(voiceName: String) {
+        if (!speaker) {
+            voicePreviewStatus = "Speaker output is off. Turn it on to hear voice previews."
+            return
+        }
         val engine = voicePreviewEngine
         if (!voicePreviewReady || engine == null) {
             voicePreviewStatus = "Voice preview is still loading. Try again in a moment."
             return
         }
-        engine.language = Locale.US
-        val installedVoice = bestInstalledVoiceForPreview(engine, voiceName)
-        if (installedVoice != null) {
-            engine.voice = installedVoice
+        voicePreviewStatus = "Preparing $voiceName preview. Live listening is paused."
+        voicePreviewScope.launch {
+            GeminiLiveCompanionRepository.stopSharedAudioConversation()
+            engine.stop()
+            engine.language = Locale.US
+            val installedVoice = bestInstalledVoiceForPreview(engine, voiceName)
+            if (installedVoice != null) {
+                engine.voice = installedVoice
+            }
+            engine.setPitch(voicePreviewPitch(voiceName))
+            engine.setSpeechRate(voicePreviewRate(voiceName))
+            voicePreviewStatus = "Playing $voiceName device preview. Microphone input stays off."
+            engine.speak(
+                voicePreviewSample(companion.name),
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "voice_preview_${voiceName.filter { it.isLetterOrDigit() }}",
+            )
         }
-        engine.setPitch(voicePreviewPitch(voiceName))
-        engine.setSpeechRate(voicePreviewRate(voiceName))
-        voicePreviewStatus = "Playing $voiceName preview."
-        engine.speak(
-            voicePreviewSample(companion.name),
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "voice_preview_${voiceName.filter { it.isLetterOrDigit() }}",
-        )
     }
 
     GradientBackground {
@@ -5600,6 +6457,9 @@ private fun VoiceLiveSettingsScreen(
                 ToggleRow("Enable voice replies", voiceReplies) { voiceReplies = it }
                 ToggleRow("Enable microphone", microphone) { microphone = it }
                 ToggleRow("Speaker output", speaker) { speaker = it }
+                MiniStateCard("Output from device", if (speaker) "Voice samples and replies play through speaker/Bluetooth." else "Speaker output is muted.")
+                MiniStateCard("Input into app", if (microphone) "Microphone can listen only in live call or training." else "Microphone input is off.")
+                Text("Voice previews are one-shot samples. They stop Gemini Live listening before playback so ${companion.name} does not answer the preview.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Wake phrase", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -5622,7 +6482,9 @@ private fun VoiceLiveSettingsScreen(
                     onSelected = { audioSource = it },
                 )
                 ToggleRow("Allow Bluetooth audio devices", bluetoothAccess) { bluetoothAccess = it }
-                MiniStateCard("Current route", audioSource)
+                MiniStateCard("Input into app", if (microphone) audioSource else "Microphone disabled")
+                MiniStateCard("Output from device", if (speaker) "Phone speaker or paired Bluetooth output" else "Speaker output muted")
+                MiniStateCard("Preview safety", "Play buttons do not open the live microphone")
                 Text("Bluetooth wake routing is saved for ${wakeAssistantName(wakeAssistantId)} only. Turn on or pair Bluetooth audio first, then reopen this screen if it is not listed.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
@@ -5653,6 +6515,43 @@ private fun VoiceLiveSettingsScreen(
                     options = listOf("Answer with voice and text", "Answer with voice only", "Answer with text only"),
                     onSelected = { answerStyle = it },
                 )
+                RoundedInputField(
+                    value = answerPhrases,
+                    onValueChange = { answerPhrases = it },
+                    label = "Answer phrases",
+                    minLines = 3,
+                )
+                SoftDropdown(
+                    label = "Live call ringtone",
+                    selected = ringtoneChoice,
+                    options = CALL_RINGTONE_OPTIONS,
+                    onSelected = { selected ->
+                        when (selected) {
+                            "Choose from device" -> launchRingtonePicker()
+                            "Device ringtone" -> if (ringtoneUri.isBlank()) launchRingtonePicker() else ringtoneChoice = selected
+                            else -> ringtoneChoice = selected
+                        }
+                    },
+                )
+                SoftDropdown(
+                    label = "Notification chime",
+                    selected = notificationSoundChoice,
+                    options = NOTIFICATION_SOUND_OPTIONS,
+                    onSelected = { selected ->
+                        when (selected) {
+                            "Choose from device" -> launchNotificationPicker()
+                            "Device notification" -> if (notificationSoundUri.isBlank()) launchNotificationPicker() else notificationSoundChoice = selected
+                            else -> notificationSoundChoice = selected
+                        }
+                    },
+                )
+                SoftDropdown(
+                    label = "Urgency",
+                    selected = answerUrgency,
+                    options = CALL_URGENCY_OPTIONS,
+                    onSelected = { answerUrgency = it },
+                )
+                MiniStateCard("Trait urgency", callUrgencyLabel(answerUrgency, companion))
             }
         }
     }
@@ -5679,7 +6578,7 @@ private fun JournalStorageSettingsScreen(
             }
             GlassCard {
                 Text("Storage structure", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("Device: Room database later. Preferences: DataStore later. Cloud: users/{userId}/journalEntries/{entryId} in Firestore.", color = TextMuted)
+                Text("Storage options: user device, Google Drive, OneNote, compatible cloud storage, or LunaKai cloud. Admin-only diagnostics keep technical paths out of user screens.", color = TextMuted)
             }
         }
     }
@@ -5754,7 +6653,7 @@ private fun NotificationSettingsScreen(companion: CompanionProfile) {
                     options = listOf("Calculated from character preferences", "Soft only", "Normal", "High urgency"),
                     onSelected = { urgencyMode = it },
                 )
-                Text("LUNAKAI keeps the deeper companion-experience calculation in the background, blending style, urgency, character mode, support focus, personality traits, and communication style.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("LunaKai keeps the deeper companion-experience calculation in the background, blending style, urgency, character mode, support focus, personality traits, and communication style.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 ToggleRow("Daily gentle prompt", dailyPrompt) { dailyPrompt = it }
@@ -5762,6 +6661,207 @@ private fun NotificationSettingsScreen(companion: CompanionProfile) {
                 ToggleRow("Journal reminders", journalReminders) { journalReminders = it }
                 ToggleRow("Supportive safety nudges", crisisNudges) { crisisNudges = it }
                 ToggleRow("Quiet hours", quietHours) { quietHours = it }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun GlobalProviderSetupDialog(
+    providerOptions: List<String>,
+    providerName: String,
+    endpoint: String,
+    model: String,
+    onProviderChange: (String) -> Unit,
+    onEndpointChange: (String) -> Unit,
+    onModelChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var openRouterKey by remember { mutableStateOf(context.prefString("openrouter_api_key", "")) }
+    var deepSeekKey by remember { mutableStateOf(context.prefString("deepseek_api_key", "")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardDark,
+        title = { Text("AI Provider Options", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SoftDropdown(
+                    label = "Provider",
+                    selected = providerName,
+                    options = providerOptions,
+                    onSelected = onProviderChange,
+                )
+                when (providerName) {
+                    "LunaKai Adult" -> {
+                        MiniStateCard("Home server", "Uses local Ollama model lunakai-ai-adult when your phone can reach your computer.")
+                        SolidInputField(endpoint.ifBlank { LUNAKAI_LOCAL_ENDPOINT }, onEndpointChange, "Endpoint", placeholder = LUNAKAI_LOCAL_ENDPOINT)
+                        SolidInputField(model.ifBlank { LUNAKAI_LOCAL_MODEL }, onModelChange, "Model", placeholder = LUNAKAI_LOCAL_MODEL)
+                    }
+                    "Gemini" -> {
+                        MiniStateCard("Gemini", "Uses the Firebase/Gemini integration already inside the app.")
+                        SolidInputField(model.ifBlank { "gemini-2.5-flash" }, onModelChange, "Model", placeholder = "gemini-2.5-flash")
+                    }
+                    "OpenRouter" -> {
+                        SolidInputField(openRouterKey, { key -> openRouterKey = key; context.savePref("openrouter_api_key", key) }, "OpenRouter API key", placeholder = "sk-or-v1-...", visualTransformation = PasswordVisualTransformation())
+                        SolidInputField(model, onModelChange, "Model", placeholder = AdultRoleplayRepository.DEFAULT_ADULT_MODEL)
+                    }
+                    "DeepSeek" -> {
+                        SolidInputField(deepSeekKey, { key -> deepSeekKey = key; context.savePref("deepseek_api_key", key) }, "DeepSeek API key", placeholder = "sk-...", visualTransformation = PasswordVisualTransformation())
+                        SolidInputField(model, onModelChange, "Model", placeholder = AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL)
+                    }
+                    else -> {
+                        SolidInputField(endpoint, onEndpointChange, "Custom endpoint", placeholder = "https://")
+                        SolidInputField(model, onModelChange, "Model", placeholder = "model-name")
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done", color = DeepRose) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close", color = TextMuted) } },
+    )
+}
+
+@Composable
+private fun AdminSettingsScreen() {
+    val context = LocalContext.current
+    var adminPin by remember { mutableStateOf("") }
+    val email = currentFirebaseEmail().orEmpty()
+    val unlocked = email.equals(ADMIN_EMAIL, ignoreCase = true) && adminPin == ADMIN_PIN
+    var providersRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
+    val savedProviders = parseProviderOptions(providersRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
+    val providerChoicesToAdd = DEFAULT_ADMIN_PROVIDER_OPTIONS.filterNot { it in savedProviders }.ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS.filter { it != "LunaKai Adult" } }
+    var providerToAdd by remember(providerChoicesToAdd) { mutableStateOf(providerChoicesToAdd.firstOrNull() ?: "OpenRouter") }
+    var adminActiveProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
+    if (adminActiveProvider !in savedProviders) {
+        adminActiveProvider = "LunaKai Adult"
+        context.savePref("global_ai_provider", "LunaKai Adult")
+        context.savePref("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)
+        context.savePref("global_ai_model", LUNAKAI_LOCAL_MODEL)
+    }
+    val traitNames = listOf("Protective", "Jealous", "Clingy", "Rude", "Playful", "Funny", "Ambitious", "Kind", "Sweet", "Provider")
+    val traitSettings = remember { mutableStateMapOf<String, Float>() }
+    traitNames.forEach { trait ->
+        if (trait !in traitSettings) traitSettings[trait] = context.prefString("admin_trait_$trait", "50").toFloatOrNull() ?: 50f
+    }
+    var masterRolePlayEnabled by remember { mutableStateOf(context.prefBoolean("admin_master_roleplay_enabled", true)) }
+    var masterBDSMEnabled by remember { mutableStateOf(context.prefBoolean("admin_master_bdsm_enabled", true)) }
+    var masterAdultLanguageEnabled by remember { mutableStateOf(context.prefBoolean("admin_master_adult_language_enabled", true)) }
+
+    GradientBackground {
+        ScreenScroll {
+            if (!unlocked) {
+                SectionHeader("Control Center", "Admin-only controls.")
+                GlassCard {
+                    if (!email.equals(ADMIN_EMAIL, ignoreCase = true)) {
+                        MiniStateCard("Admin access", "Sign in as the admin account to unlock controls.")
+                    }
+                    RoundedInputField(adminPin, { adminPin = it }, "Admin PIN")
+                    Text("Enter the admin PIN to unlock provider, RolePlay, BDSM, and Emo Intel controls.", color = TextMuted, fontSize = 13.sp)
+                }
+            } else {
+                SectionHeader("Control Center", "Admin settings supersede user settings across the app.")
+                GlassCard {
+                    Text("Admin notification box", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("App diagnostics, provider errors, Firebase path notes, and future system alerts route here instead of normal user screens.", color = TextMuted, lineHeight = 18.sp)
+                    MiniStateCard("Latest status", "No admin-only errors stored yet")
+                }
+                GlassCard {
+                    Text("Provider Control", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Admin provider selections supersede the user provider menu. LunaKai Adult is protected as the local default; other providers can be added or removed.",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                    )
+
+                    Text("Active App Provider", color = TextDark, fontWeight = FontWeight.Bold)
+                    SoftDropdown(
+                        label = "Admin-selected active provider",
+                        selected = adminActiveProvider,
+                        options = savedProviders,
+                        onSelected = { provider ->
+                            adminActiveProvider = provider
+                            context.savePref("global_ai_provider", provider)
+                            context.savePref("global_ai_endpoint", endpointForProvider(provider, ""))
+                            context.savePref("global_ai_model", modelForProvider(provider))
+                        },
+                    )
+                    MiniStateCard("Admin override", "$adminActiveProvider is the active app provider")
+
+                    HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
+
+                    SoftDropdown("Provider to add", providerToAdd, providerChoicesToAdd) { providerToAdd = it }
+                    SecondarySoftButton("Add Provider", onClick = {
+                        val next = (savedProviders + providerToAdd).distinct().take(10)
+                        providersRaw = next.joinToString("|")
+                        context.saveAdminProviderOptions(next)
+                    })
+                    savedProviders.forEachIndexed { index, provider ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                MiniStateCard("Provider ${index + 1}", provider)
+                            }
+                            if (provider == "LunaKai Adult") {
+                                MiniStateCard("Locked", "Default")
+                            } else {
+                                SecondarySoftButton("Remove", onClick = {
+                                    val next = savedProviders.filterNot { it == provider }
+                                    providersRaw = next.joinToString("|")
+                                    context.saveAdminProviderOptions(next)
+
+                                    if (adminActiveProvider == provider || context.prefString("global_ai_provider", "LunaKai Adult") == provider) {
+                                        adminActiveProvider = "LunaKai Adult"
+                                        context.savePref("global_ai_provider", "LunaKai Adult")
+                                        context.savePref("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)
+                                        context.savePref("global_ai_model", LUNAKAI_LOCAL_MODEL)
+                                    }
+                                })
+                            }
+                        }
+                    }
+                }
+                GlassCard {
+                    Text("RolePlay Master Controls", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    ToggleRow("Allow RolePlay app-wide", masterRolePlayEnabled) { enabled ->
+                        masterRolePlayEnabled = enabled
+                        context.savePref("admin_master_roleplay_enabled", enabled)
+                    }
+                    ToggleRow("Allow BDSM Adult Sexual Play app-wide", masterBDSMEnabled) { enabled ->
+                        masterBDSMEnabled = enabled
+                        context.savePref("admin_master_bdsm_enabled", enabled)
+                    }
+                    ToggleRow("Allow adult/anatomical language app-wide", masterAdultLanguageEnabled) { enabled ->
+                        masterAdultLanguageEnabled = enabled
+                        context.savePref("admin_master_adult_language_enabled", enabled)
+                    }
+                    Text("Admin settings supersede user RolePlay/BDSM inputs inside the app.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                GlassCard {
+                    Text("Emo Intel", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Set trait intensity from 0 to 100. These app-wide limits guide companion personality moderation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                    traitNames.forEach { trait ->
+                        val value = traitSettings[trait] ?: 50f
+                        Text("$trait: ${value.toInt()}", color = TextDark, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Slider(
+                                value = value,
+                                onValueChange = { newValue ->
+                                    traitSettings[trait] = newValue
+                                    context.savePref("admin_trait_$trait", newValue.toInt().toString())
+                                },
+                                valueRange = 0f..100f,
+                                modifier = Modifier.weight(1f),
+                            )
+                            MiniStateCard("#", value.toInt().toString())
+                        }
+                    }
+                }
             }
         }
     }
@@ -5964,7 +7064,7 @@ private fun CrisisResourcesScreen(onBack: () -> Unit) {
 }
 
 private fun disclaimerCopy(): String {
-    return "LUNAKAI Wellness Companion is an AI-powered wellness and reflection app. It is designed to offer supportive conversation, journaling prompts, grounding tools, and general emotional wellness information.\n\n" +
+    return "LunaKai Wellness Companion is an AI-powered wellness and reflection app. It is designed to offer supportive conversation, journaling prompts, grounding tools, and general emotional wellness information.\n\n" +
         "This app is not a licensed therapist, doctor, counselor, emergency service, or crisis service. It does not diagnose, treat, cure, or prevent any mental health condition or medical condition.\n\n" +
         "The companion may share general wellness ideas inspired by publicly available emotional wellness, communication, mindfulness, and self-reflection concepts. This information is for educational and supportive purposes only and should not replace professional care.\n\n" +
         "If you feel like you may hurt yourself, hurt someone else, or you are in immediate danger, call emergency services right away. If you are in the United States and need emotional crisis support, call or text 988 or use the 988 Lifeline chat.\n\n" +
@@ -6110,6 +7210,7 @@ private fun QuickActionCard(
     icon: String,
     color: Color,
     modifier: Modifier = Modifier,
+    centerContent: Boolean = false,
     onClick: () -> Unit,
 ) {
     GlassCard(
@@ -6119,9 +7220,33 @@ private fun QuickActionCard(
         padding = CardPadding,
         background = CardDark.copy(alpha = 0.94f),
     ) {
-        SoftIcon(icon, color)
-        Text(title, color = TextDark, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(subtitle, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = if (centerContent) Alignment.CenterHorizontally else Alignment.Start,
+            verticalArrangement = if (centerContent) Arrangement.Center else Arrangement.Top,
+        ) {
+            SoftIcon(icon, color)
+            Text(
+                title,
+                color = TextDark,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = if (centerContent) TextAlign.Center else TextAlign.Start,
+                modifier = if (centerContent) Modifier.fillMaxWidth() else Modifier,
+            )
+            Text(
+                subtitle,
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = if (centerContent) TextAlign.Center else TextAlign.Start,
+                modifier = if (centerContent) Modifier.fillMaxWidth() else Modifier,
+            )
+        }
     }
 }
 
@@ -6226,7 +7351,13 @@ private fun SectionHeader(title: String, subtitle: String? = null) {
 }
 
 @Composable
-private fun RoundedInputField(value: String, onValueChange: (String) -> Unit, label: String, minLines: Int = 1) {
+private fun RoundedInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    minLines: Int = 1,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -6234,6 +7365,7 @@ private fun RoundedInputField(value: String, onValueChange: (String) -> Unit, la
         modifier = Modifier.fillMaxWidth(),
         shape = MediumShape,
         minLines = minLines,
+        visualTransformation = visualTransformation,
         colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = TextPrimary,
             unfocusedTextColor = TextPrimary,
@@ -6426,27 +7558,95 @@ private fun IconCircleButton(iconResId: Int, contentDescription: String, onClick
 @Composable
 private fun CheckInScreen(onBack: () -> Unit, onSaveToJournal: () -> Unit) {
     var mood by remember { mutableStateOf("Calm") }
-    var note by remember { mutableStateOf("") }
-    val needs = listOf("Comfort", "Clarity", "Courage", "Rest", "Grounding", "Motivation")
     var selectedNeed by remember { mutableStateOf("Comfort") }
+    var note by remember { mutableStateOf("") }
+    val moods = listOf("Calm", "Heavy", "Hopeful", "Anxious", "Tired", "Happy", "Restless", "Ambitious", "Inspired", "Intrigued", "In Love", "Resentful", "Jealous")
+    val needs = listOf("Comfort", "Clarity", "Courage", "Rest", "Plan", "Motivation")
 
     GradientBackground {
         ScreenScroll {
             WellnessBackButton(onBack)
-            SectionHeader("Check-In", "Name your mood and choose what kind of support you need.")
+            SectionHeader("Check-In")
             GlassCard {
-                Text("How are you arriving right now?", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                    listOf("Calm", "Heavy", "Anxious", "Hopeful", "Tired").forEach {
-                        MoodChip(label = it, selected = mood == it, onClick = { mood = it })
-                    }
-                }
+                Text("How are you feeling right now?", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                SoftDropdown("Feeling", mood, moods) { mood = it }
                 Text("Support need", color = TextSecondary, fontWeight = FontWeight.SemiBold)
                 CheckboxOptionGrid(options = needs, selected = setOf(selectedNeed), onToggle = { selectedNeed = it })
-                RoundedInputField(note, { note = it }, "What should your companion know?", minLines = 4)
+                RoundedInputField(note, { note = it }, "What is your body telling you?", minLines = 4)
                 PrimaryGradientButton("Save Check-In", onClick = onSaveToJournal)
-                Text("Saved check-ins can later sync to users/{userId}/checkIns.", color = TextMuted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    SecondarySoftButton("Disclaimer", modifier = Modifier.weight(1f), onClick = {})
+                    SecondarySoftButton("Crisis", modifier = Modifier.weight(1f), onClick = {})
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ActivationAffirmationButton(
+    title: String,
+    instruction: String,
+    selected: Boolean,
+    colors: List<Color>,
+    onActivate: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    val infinite = rememberInfiniteTransition(label = "activation")
+    val pulse by infinite.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(950), RepeatMode.Reverse),
+        label = "pulse",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MediumShape)
+            .background(Brush.horizontalGradient(colors))
+            .border(1.dp, Color.White.copy(alpha = if (selected) 0.65f else 0.24f), MediumShape)
+            .pointerInput(title) {
+                detectTapGestures(
+                    onTap = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onActivate()
+                    },
+                    onLongPress = {
+                        repeat(3) { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+                        onActivate()
+                    },
+                )
+            }
+            .padding(18.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = Color.White, fontSize = if (selected) (18f * pulse).sp else 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text(instruction, color = Color.White.copy(alpha = 0.9f), fontSize = 12.sp, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun MagicBlackAffirmationOrb(message: String) {
+    val infinite = rememberInfiniteTransition(label = "magic-orb")
+    val shimmer by infinite.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(tween(1800), RepeatMode.Reverse),
+        label = "shimmer",
+    )
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(240.dp)
+                .shadow(28.dp, CircleShape)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(Color(0xFF1A1024), Color(0xFF030106), Color.Black)))
+                .border(2.dp, Color.White.copy(alpha = 0.12f + shimmer * 0.22f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(message, color = Color.White.copy(alpha = 0.88f), fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.padding(26.dp))
         }
     }
 }
@@ -6454,25 +7654,40 @@ private fun CheckInScreen(onBack: () -> Unit, onSaveToJournal: () -> Unit) {
 @Composable
 private fun AffirmationsScreen(onBack: () -> Unit) {
     val affirmations = listOf(
-        "You are not behind. You are becoming at your own pace.",
-        "You can move gently and still move forward.",
-        "Your needs are real, and they deserve room.",
-        "You do not have to solve everything tonight.",
+        "Happiness Button Tap or Hold to activate" to "A warm flash of permission to feel good right now.",
+        "A Dose of Ambition Tap or Hold to Activate" to "A strong blue spark for focus, drive, and forward motion.",
+        "Energize your intentions Tap or Hold to Activate" to "Emerald energy for the next action you choose on purpose.",
+        "You do not have to solve everything tonight." to "Hold here for relaxation activation.",
     )
-    var selected by remember { mutableStateOf(affirmations.first()) }
+    val messages = listOf(
+        "You are allowed to feel good before everything is perfect.",
+        "Your ambition can be steady, focused, and kind to your nervous system.",
+        "One clear intention is enough to begin again.",
+        "Rest is not quitting. Rest is how your strength returns.",
+    )
+    var selectedIndex by remember { mutableStateOf(0) }
 
     GradientBackground {
         ScreenScroll {
             WellnessBackButton(onBack)
             SectionHeader("Affirmations", "Give your mind something safe to hold.")
             GlassCard(background = CardAccent.copy(alpha = 0.94f)) {
-                Text(selected, color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
-                Text("Soft reminder", color = TextMuted, modifier = Modifier.padding(top = 8.dp))
+                MagicBlackAffirmationOrb(messages[selectedIndex])
             }
-            affirmations.forEach { line ->
-                SelectableInfoCard(line, "Tap to hold this affirmation today.", selected == line) {
-                    selected = line
+            affirmations.forEachIndexed { index, item ->
+                val colors = when (index) {
+                    0 -> listOf(Color(0xFFFFD84D), Color(0xFFFFF4A3), Color(0xFFFFC107))
+                    1 -> listOf(Color(0xFF113C8D), Color(0xFF2E8BFF), Color.White.copy(alpha = 0.72f))
+                    2 -> listOf(Color(0xFF0C7A43), Color(0xFFC0C0C0), Color(0xFFE7FFF2))
+                    else -> listOf(Lavender, CalmBlue, RosePink)
                 }
+                ActivationAffirmationButton(
+                    title = item.first,
+                    instruction = item.second,
+                    selected = selectedIndex == index,
+                    colors = colors,
+                    onActivate = { selectedIndex = index },
+                )
             }
             SecondarySoftButton("Save Affirmation to Journal", onClick = {})
         }

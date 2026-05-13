@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -50,6 +51,7 @@ class GeminiLiveCompanionRepository(
     suspend fun startAudioConversation(
         companion: GeminiCompanionContext,
         modeLabel: String,
+        answerPhrase: String? = null,
     ): GeminiLiveSessionState = withContext(Dispatchers.IO) {
         runCatching {
             stopSharedAudioConversation()
@@ -61,7 +63,7 @@ class GeminiLiveCompanionRepository(
                     speechConfig = SpeechConfig(Voice(voiceName))
                 },
                 systemInstruction = content {
-                    text(liveSystemInstruction(companion, modeLabel))
+                    text(liveSystemInstruction(companion, modeLabel, answerPhrase))
                 },
             )
             val connectedSession = liveModel.connect()
@@ -73,6 +75,14 @@ class GeminiLiveCompanionRepository(
                     Log.e("FancieLiveGemini", "Live audio conversation stopped with error", error)
                 }
             }
+            answerPhrase
+                ?.trim()
+                ?.take(120)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { openingLine ->
+                    delay(500)
+                    connectedSession.send("The phone call has connected. Say exactly this opening line once, then pause and listen: \"$openingLine\"")
+                }
             GeminiLiveSessionState.Connected("Voice is connected to Gemini Live API.")
         }.getOrElse { error ->
             Log.e("FancieLiveGemini", "Gemini Live API connection failed", error)
@@ -94,11 +104,24 @@ class GeminiLiveCompanionRepository(
             voiceLabel.contains("Feminine", ignoreCase = true)
         return when {
             isMale -> when (voiceLabel) {
-                "Deep Male" -> "Orus"
-                "Velvet Male" -> "Orus"
+                "Deep Smooth Male" -> "Orus"
                 "Low Velvet Male" -> "Orus"
                 "Silky Soft Male" -> "Puck"
                 "Warm Whisper Male" -> "Puck"
+                "Sultry Calm Male" -> "Fenrir"
+                "Midnight Male" -> "Orus"
+                "Soft Romance Male" -> "Puck"
+                "Protective Warm Male" -> "Charon"
+                "Smooth Low Male" -> "Orus"
+                "Soft Sexy Male" -> "Puck"
+                "Velvet Lover Male" -> "Orus"
+                "Bedroom Whisper Male" -> "Puck"
+                "Romantic Deep Male" -> "Fenrir"
+                "Slow Burn Male" -> "Orus"
+                "Gentle Low Male" -> "Fenrir"
+                "Smoky Soft Male" -> "Puck"
+                "Deep Male" -> "Orus"
+                "Velvet Male" -> "Orus"
                 "Protective Male" -> "Charon"
                 "Calm Male" -> "Fenrir"
                 "Motivational Male" -> "Puck"
@@ -121,9 +144,10 @@ class GeminiLiveCompanionRepository(
         }
     }
 
-    private fun liveSystemInstruction(companion: GeminiCompanionContext, modeLabel: String): String = """
+    private fun liveSystemInstruction(companion: GeminiCompanionContext, modeLabel: String, answerPhrase: String?): String = """
         You are ${companion.companionName}, the live voice companion inside LUNAKAI Wellness Companion.
         The user is in $modeLabel.
+        Opening answer phrase: ${answerPhrase?.take(120)?.ifBlank { "none" } ?: "none"}.
         Speak warmly, briefly, and naturally. You are supportive, emotionally intelligent, and non-clinical.
         You are not a therapist, doctor, counselor, emergency service, or crisis service.
         Do not diagnose, treat, cure, or prevent medical or mental health conditions.

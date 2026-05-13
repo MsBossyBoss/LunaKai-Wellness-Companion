@@ -19,6 +19,7 @@ class ChatViewModel(
     private val firestoreProvider: () -> FirebaseFirestore = { FirebaseFirestore.getInstance() },
     private val geminiRepository: GeminiCompanionRepository = GeminiCompanionRepository(),
     private val adultRoleplayRepository: AdultRoleplayRepository = AdultRoleplayRepository(),
+    private val ollamaRepository: OllamaCompanionRepository = OllamaCompanionRepository(),
 ) : ViewModel() {
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
@@ -85,7 +86,6 @@ class ChatViewModel(
             }
     }
 
-
     private fun migrateLegacyMessagesIfNeeded(uid: String, companionId: String, stableChatId: String) {
         if (!migratedLegacyChatIds.add(stableChatId)) return
 
@@ -97,6 +97,7 @@ class ChatViewModel(
                     .document(uid)
                     .collection("chats")
                     .document(stableChatId)
+
                 val stableSnapshot = stableChatRef.collection("messages").limit(1).get().awaitTask()
                 if (!stableSnapshot.isEmpty) return@runCatching
 
@@ -112,30 +113,45 @@ class ChatViewModel(
                         .document(uid)
                         .collection("chats")
                         .document(legacyChatId)
+
                     val legacyMessages = legacyChatRef.collection("messages")
                         .orderBy("createdAt", Query.Direction.ASCENDING)
                         .get()
                         .awaitTask()
+
                     if (legacyMessages.isEmpty) return@forEach
 
                     val batch = firestore.batch()
+
                     legacyMessages.documents.forEach { document ->
                         val data = document.data.orEmpty().toMutableMap()
                         val messageId = (data["id"] as? String).takeIf { !it.isNullOrBlank() } ?: document.id
+
                         data["id"] = messageId
                         data["chatId"] = stableChatId
                         data["companionId"] = data["companionId"] as? String ?: companionId
                         data["mode"] = data["mode"] as? String ?: ChatMessage.MODE_TEXT
+
                         batch.set(stableChatRef.collection("messages").document(messageId), data)
                     }
-                    val latest = legacyMessages.documents.maxByOrNull { chatSummaryMillisForViewModel(it.get("createdAt")) }
+
+                    val latest = legacyMessages.documents.maxByOrNull {
+                        chatSummaryMillisForViewModel(it.get("createdAt"))
+                    }
+
                     val latestText = latest?.getString("text").orEmpty()
-                    batch.set(stableChatRef, mapOf(
-                        "companionId" to companionId,
-                        "lastMessage" to latestText,
-                        "updatedAt" to chatSummaryMillisForViewModel(latest?.get("createdAt")),
-                        "mode" to (latest?.getString("mode") ?: ChatMessage.MODE_TEXT),
-                    ), SetOptions.merge())
+
+                    batch.set(
+                        stableChatRef,
+                        mapOf(
+                            "companionId" to companionId,
+                            "lastMessage" to latestText,
+                            "updatedAt" to chatSummaryMillisForViewModel(latest?.get("createdAt")),
+                            "mode" to (latest?.getString("mode") ?: ChatMessage.MODE_TEXT),
+                        ),
+                        SetOptions.merge()
+                    )
+
                     batch.commit().awaitTask()
                 }
             }.onFailure { error ->
@@ -143,6 +159,7 @@ class ChatViewModel(
             }
         }
     }
+
     fun sendMessage(
         companion: CompanionProfile,
         geminiContext: GeminiCompanionContext,
@@ -155,6 +172,7 @@ class ChatViewModel(
 
         val chatId = stableChatIdForCompanion(companion.id)
         val userMessage = newMessage(chatId, companion.id, ChatMessage.SENDER_USER, trimmed, mode)
+
         appendOptimistic(userMessage)
         _isTyping.value = true
         _geminiState.value = GeminiCompanionState.Loading
@@ -162,26 +180,57 @@ class ChatViewModel(
 
         viewModelScope.launch {
             launch { saveMessage(userMessage, companion.name) }
-            val result = if (geminiContext.bdsmEnabled && geminiContext.bdsmAdultConsentConfirmed && geminiContext.adultProviderEnabled) {
-                adultRoleplayRepository.sendMessage(geminiContext, trimmed, history)
-            } else {
-                geminiRepository.sendMessage(geminiContext, trimmed, history)
+
+            val result = when {
+                isLocalLunaKaiAi(geminiContext.adultProviderEndpoint) -> {
+                    ollamaRepository.sendMessage(geminiContext, trimmed, history)
+                }
+
+                geminiContext.adultProviderEndpoint.equals("gemini", ignoreCase = true) -> {
+                    geminiRepository.sendMessage(geminiContext, trimmed, history)
+                }
+
+                geminiContext.bdsmEnabled &&
+                    geminiContext.bdsmAdultConsentConfirmed &&
+                    geminiContext.adultProviderEnabled -> {
+                    adultRoleplayRepository.sendMessage(geminiContext, trimmed, history)
+                }
+
+                else -> {
+                    ollamaRepository.sendMessage(geminiContext, trimmed, history)
+                }
             }
+
             when (result) {
                 GeminiCompanionState.Loading -> Unit
+
                 is GeminiCompanionState.Success -> {
-                    val reply = newMessage(chatId, companion.id, ChatMessage.SENDER_COMPANION, result.text, mode)
+                    val reply = newMessage(
+                        chatId = chatId,
+                        companionId = companion.id,
+                        sender = ChatMessage.SENDER_COMPANION,
+                        text = result.text,
+                        mode = mode,
+                    )
                     appendOptimistic(reply)
                     _geminiState.value = result
                     launch { saveMessage(reply, companion.name) }
                 }
+
                 is GeminiCompanionState.Error -> {
-                    val reply = newMessage(chatId, companion.id, ChatMessage.SENDER_SYSTEM, result.message, mode)
+                    val reply = newMessage(
+                        chatId = chatId,
+                        companionId = companion.id,
+                        sender = ChatMessage.SENDER_SYSTEM,
+                        text = result.message,
+                        mode = mode,
+                    )
                     appendOptimistic(reply)
                     _geminiState.value = result
                     launch { saveMessage(reply, companion.name) }
                 }
             }
+
             _isTyping.value = false
         }
     }
@@ -198,8 +247,10 @@ class ChatViewModel(
         val chatId = stableChatIdForCompanion(companion.id)
         val userMessage = newMessage(chatId, companion.id, ChatMessage.SENDER_USER, trimmed, mode)
         val reply = newMessage(chatId, companion.id, ChatMessage.SENDER_COMPANION, companionText, mode)
+
         appendOptimistic(userMessage)
         appendOptimistic(reply)
+
         _geminiState.value = GeminiCompanionState.Success(companionText)
         _chatStatus.value = null
 
@@ -224,25 +275,31 @@ class ChatViewModel(
                 .document(uid)
                 .collection("chats")
                 .document(message.chatId)
+
             val messageRef = chatRef.collection("messages").document(message.id)
 
-            messageRef.set(mapOf(
-                "id" to message.id,
-                "chatId" to message.chatId,
-                "companionId" to message.companionId,
-                "sender" to message.sender,
-                "text" to message.text,
-                "mode" to message.mode,
-                "createdAt" to message.createdAt,
-            )).awaitTask()
+            messageRef.set(
+                mapOf(
+                    "id" to message.id,
+                    "chatId" to message.chatId,
+                    "companionId" to message.companionId,
+                    "sender" to message.sender,
+                    "text" to message.text,
+                    "mode" to message.mode,
+                    "createdAt" to message.createdAt,
+                )
+            ).awaitTask()
 
-            chatRef.set(mapOf(
-                "companionId" to message.companionId,
-                "companionName" to companionName,
-                "lastMessage" to message.text,
-                "updatedAt" to message.createdAt,
-                "mode" to message.mode,
-            ), SetOptions.merge()).awaitTask()
+            chatRef.set(
+                mapOf(
+                    "companionId" to message.companionId,
+                    "companionName" to companionName,
+                    "lastMessage" to message.text,
+                    "updatedAt" to message.createdAt,
+                    "mode" to message.mode,
+                ),
+                SetOptions.merge()
+            ).awaitTask()
         }.onFailure { error ->
             Log.w(TAG, "Could not save chat message to ${message.chatId}", error)
             _chatStatus.value = "Message did not save yet: ${error.message ?: "check Firebase Auth/Firestore setup."}"
@@ -269,6 +326,12 @@ class ChatViewModel(
         mode = mode,
         createdAt = System.currentTimeMillis(),
     )
+
+    private fun isLocalLunaKaiAi(endpoint: String): Boolean {
+        return endpoint.contains("11434", ignoreCase = true) ||
+            endpoint.contains("localhost", ignoreCase = true) ||
+            endpoint.contains("192.168.", ignoreCase = true)
+    }
 
     override fun onCleared() {
         listenerRegistration?.remove()

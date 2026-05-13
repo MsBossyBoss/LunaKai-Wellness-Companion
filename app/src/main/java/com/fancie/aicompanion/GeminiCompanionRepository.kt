@@ -30,6 +30,7 @@ data class GeminiCompanionContext(
     val adultProviderModel: String = "gryphe/mythomax-l2-13b",
     val openRouterApiKey: String = "",
     val deepSeekApiKey: String = "",
+    val adminEmoIntelProfile: String = "",
 )
 
 sealed interface GeminiCompanionState {
@@ -80,11 +81,13 @@ class GeminiCompanionRepository(
         - Support focus: ${companion.supportFocus.joinToString(", ").ifBlank { "Stress, grounding, reflection" }}
         - Roleplay styles: ${geminiSafeRoleplayStyles(companion).joinToString(", ").ifBlank { "Wellness Coach" }}
         - Description: ${companion.shortDescription}
-        Personality traits, communication style, character mode, and support focus should shape every response so the companion feels intentional and consistent.
+        - Admin Emo Intel trait profile:
+${companion.adminEmoIntelProfile.ifBlank { "- No admin trait profile provided." }}
+        Personality traits, communication style, character mode, support focus, and admin Emo Intel values should shape every response so the companion feels intentional and consistent. Admin Emo Intel values are 0-100 intensity controls where 0 is absent, 50 is moderate, and 100 is defining.
         ${bdsmPrompt(companion)}
         Wellness support can use generally accepted grounding, mindfulness, journaling, emotional reflection, and behavioral activation concepts, but do not use the DSM as a diagnostic tool. Do not diagnose, label, or imply a mental disorder. Encourage licensed professional support for diagnosis or treatment questions.
         Athletic Partner mode should focus on practical fitness support: asking for goals, experience level, available equipment, limitations, workout preferences, sets, reps, rest time, and check-ins. Avoid medical certainty and encourage professional advice for injury, pain, pregnancy, or medical conditions.
-        Monologue Practice mode should ask for an uploaded/pasted script, identify user lines and companion lines, then rehearse line-by-line, full read-through, repeat-after-me, or performance feedback.
+        Acting Partner / Monologue Practice mode is for acting students. Ask the user to upload or paste a script, monologue, dialogue, or scene text. Adapt demeanor to the actor's chosen tone and the scene's emotional context. Read opposite lines, cue the user, perform full scenes, repeat lines, and give feedback on pacing, emotion, breath, clarity, timing, memorization, and believable delivery. Preserve script text unless asked to edit.
         Follow Gemini safety rules. If a user message is outside what Gemini can answer, set a brief boundary and continue with the closest supported version of the conversation.
         Keep responses concise, natural, emotionally intelligent, safe, respectful, and consent-aware.
     """.trimIndent()

@@ -133,6 +133,7 @@ abstract class LocalHttpVoiceProvider(
         if (trimmed.isBlank()) {
             return@withContext LocalVoiceResult(displayName, voiceProfile.voiceId, errorMessage = "No voice text was provided.")
         }
+        Log.i("LunaKaiLocalVoice", "voiceRequest provider=$displayName speakUrl=$speakUrl voiceId=${voiceProfile.voiceId} voiceLabel=${voiceProfile.label} gender=${voiceProfile.gender} textChars=${trimmed.length}")
         runCatching {
             val payload = JSONObject()
                 .put("text", trimmed.take(500))
@@ -141,6 +142,7 @@ abstract class LocalHttpVoiceProvider(
                 .put("gender", voiceProfile.gender)
             val response = postJson(speakUrl, payload, 6_000, 60_000)
             val root = JSONObject(response.ifBlank { "{}" })
+            Log.i("LunaKaiLocalVoice", "voiceSuccess provider=$displayName voiceId=${voiceProfile.voiceId} responseChars=${response.length}")
             LocalVoiceResult(
                 providerLabel = displayName,
                 voiceId = voiceProfile.voiceId,
@@ -148,6 +150,7 @@ abstract class LocalHttpVoiceProvider(
                 message = root.optString("message").ifBlank { "Voice request accepted by $displayName." },
             )
         }.getOrElse { error ->
+            Log.w("LunaKaiLocalVoice", "voiceFailed provider=$displayName speakUrl=$speakUrl voiceId=${voiceProfile.voiceId} exception=${error::class.java.simpleName} message=${error.message}", error)
             LocalVoiceResult(
                 providerLabel = displayName,
                 voiceId = voiceProfile.voiceId,
@@ -274,6 +277,11 @@ class LocalLiveCompanionRepository {
         answerPhrase: String? = null,
     ): LocalLiveSessionState = withContext(Dispatchers.IO) {
         connected = true
+        val adultMode = companion.isAdultModeActiveForLive()
+        Log.i(
+            "LunaKaiModelRoute",
+            "liveCompanion provider=Ollama endpoint=${LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT} model=${LunaKaiLocalConfig.OLLAMA_MODEL} activeCompanionName=${companion.companionName} activeCompanionMode=${companion.characterMode} adultMode=$adultMode adultPromptIncluded=$adultMode selectedVoice=${companion.voice} modeLabel=$modeLabel",
+        )
         val openingLine = answerPhrase?.trim().orEmpty()
         if (openingLine.isBlank()) {
             return@withContext LocalLiveSessionState.Connected("Local live $modeLabel is ready. Speech-to-text and voice playback require the local faster-whisper and voice servers.")
@@ -296,6 +304,22 @@ class LocalLiveCompanionRepository {
     fun isConnected(): Boolean = connected
 }
 
+
+private fun CompanionContext.isAdultModeActiveForLive(): Boolean {
+    val roleplayText = (roleplayStyles.joinToString(" ") + " " + characterMode + " " + adultPhrasePreferences)
+        .lowercase(Locale.US)
+    return adultProviderEnabled && (
+        bdsmEnabled ||
+            bdsmAdultConsentConfirmed ||
+            anatomicalLanguageAllowed ||
+            roleplayText.contains("adult") ||
+            roleplayText.contains("bdsm") ||
+            roleplayText.contains("roleplay") ||
+            roleplayText.contains("romantic") ||
+            roleplayText.contains("monologue") ||
+            roleplayText.contains("acting")
+        )
+}
 private fun postJson(url: String, payload: JSONObject, connectTimeoutMs: Int, readTimeoutMs: Int): String {
     val connection = (URL(url).openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"

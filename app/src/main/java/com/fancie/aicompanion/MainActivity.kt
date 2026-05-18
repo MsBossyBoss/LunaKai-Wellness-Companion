@@ -123,6 +123,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.lifecycleScope
 import com.fancie.aicompanion.ui.theme.FancieAICompanionTheme
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
@@ -242,18 +243,45 @@ private fun applyAppearanceGlobals(appearance: AppAppearance) {
     CardWhite = appearance.card
 }
 
+private const val EXTRA_RUN_OLLAMA_DIAGNOSTIC = "lunakai_run_ollama_diagnostic"
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         createFancieNotificationChannel()
+        logLocalRuntimeConfig()
+        runOllamaDiagnosticIfRequested(intent)
         setContent {
             FancieAICompanionTheme(dynamicColor = false) {
                 Surface(color = Color.Transparent) {
                     FancieApp()
                 }
             }
+        }
+    }
+
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        logLocalRuntimeConfig()
+        runOllamaDiagnosticIfRequested(intent)
+    }
+
+    private fun logLocalRuntimeConfig() {
+        Log.i(
+            "LunaKaiLocalConfig",
+            "startup cleartext=true network=local host=${LunaKaiLocalConfig.OLLAMA_HOST} base=${LunaKaiLocalConfig.OLLAMA_BASE_URL} generate=${LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT} model=${LunaKaiLocalConfig.OLLAMA_MODEL} tags=${LunaKaiLocalConfig.OLLAMA_TAGS_ENDPOINT} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
+        )
+    }
+
+    private fun runOllamaDiagnosticIfRequested(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_RUN_OLLAMA_DIAGNOSTIC, false) != true) return
+        lifecycleScope.launch {
+            val report = LunaKaiOllamaDiagnostic.run()
+            Log.i("LunaKaiOllamaDiagnostic", "intent-triggered ${report.toLogString()}")
         }
     }
 
@@ -1326,6 +1354,7 @@ private fun FancieApp() {
                 )
                 AppRoute.LiveCompanionCall -> LiveCompanionCallScreen(
                     companion = activeCompanion,
+                    incomingCall = requestedRoute == "incoming_call",
                     onNavigate = { navigateTo(it) },
                 )
                 AppRoute.CompanionState -> CompanionStateScreen(
@@ -2788,7 +2817,11 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     }
 }
 @Composable
-private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (AppRoute) -> Unit) {
+private fun LiveCompanionCallScreen(
+    companion: CompanionProfile,
+    incomingCall: Boolean = false,
+    onNavigate: (AppRoute) -> Unit,
+) {
     var state by remember(companion.id) {
         mutableStateOf(
             LiveCompanionCallUiState(
@@ -2803,6 +2836,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     var showTextChat by remember { mutableStateOf(false) }
     var showCaptureSheet by remember { mutableStateOf(false) }
     var showEndCallPrompt by remember { mutableStateOf(false) }
+    var incomingCallPending by rememberSaveable(companion.id, "incoming_call_pending") { mutableStateOf(incomingCall) }
     var captureMessage by remember { mutableStateOf<String?>(null) }
     var pendingLivePhotoUri by rememberSaveable(companion.id, "live_photo") { mutableStateOf<String?>(null) }
     val chatViewModel: ChatViewModel = viewModel(key = "live_chat_${companion.id}")
@@ -5192,6 +5226,9 @@ private fun PreferencesScreen(
     val accountEmail = currentFirebaseEmail() ?: "Not available"
     var openSettingsSection by remember { mutableStateOf<String?>(null) }
     var showActiveRolePlaySetup by remember { mutableStateOf(false) }
+    val settingsScope = rememberCoroutineScope()
+    var ollamaDiagnosticSummary by remember { mutableStateOf(context.prefString("ollama_diagnostic_summary", "Not run yet.")) }
+    var ollamaDiagnosticRunning by remember { mutableStateOf(false) }
     val activeRoleplayOptions = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "RolePlay")
 
     LaunchedEffect(adminProviderOptionsRaw, globalAiProvider) {
@@ -5286,7 +5323,21 @@ private fun PreferencesScreen(
                 )
                 MiniStateCard("Endpoint", globalAiEndpoint)
                 MiniStateCard("Model", globalAiModel)
+                MiniStateCard("Timeouts", "connect 15s, read 120s, write 60s, call 150s")
                 SecondarySoftButton("Provider options", onClick = { showProviderDialog = true })
+                SecondarySoftButton(if (ollamaDiagnosticRunning) "Running Ollama diagnostic" else "Run Ollama diagnostic", onClick = {
+                    if (!ollamaDiagnosticRunning) {
+                        ollamaDiagnosticRunning = true
+                        ollamaDiagnosticSummary = "Running phone-side Ollama diagnostic..."
+                        settingsScope.launch {
+                            val report = LunaKaiOllamaDiagnostic.run()
+                            ollamaDiagnosticSummary = report.toUserSummary()
+                            context.savePref("ollama_diagnostic_summary", ollamaDiagnosticSummary)
+                            ollamaDiagnosticRunning = false
+                        }
+                    }
+                })
+                Text(ollamaDiagnosticSummary, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
 
             if (showProviderDialog) {

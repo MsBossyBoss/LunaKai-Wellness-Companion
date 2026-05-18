@@ -11,6 +11,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -36,6 +37,7 @@ class ChatViewModel(
     private var loadedCompanionId: String? = null
     private var loadedChatId: String? = null
     private val migratedLegacyChatIds = mutableSetOf<String>()
+    private var warmupStarted = false
 
     fun loadMessages(companionId: String) {
         val chatId = stableChatIdForCompanion(companionId)
@@ -83,6 +85,8 @@ class ChatViewModel(
                     _chatStatus.value = null
                 }
             }
+
+        warmUpLocalModelIfNeeded()
     }
 
     private fun migrateLegacyMessagesIfNeeded(uid: String, companionId: String, stableChatId: String) {
@@ -159,6 +163,17 @@ class ChatViewModel(
         }
     }
 
+    private fun warmUpLocalModelIfNeeded(showStatus: Boolean = false) {
+        if (warmupStarted) return
+        warmupStarted = true
+        viewModelScope.launch {
+            if (showStatus) _chatStatus.value = "Warming up LunaKai model..."
+            val warmed = ollamaRepository.warmUpModel()
+            if (showStatus && _chatStatus.value == "Warming up LunaKai model...") {
+                _chatStatus.value = if (warmed) null else "Local LunaKai model warm-up did not finish yet. Chat will still try the request."
+            }
+        }
+    }
     fun sendMessage(
         companion: CompanionProfile,
         companionContext: CompanionContext,
@@ -175,60 +190,70 @@ class ChatViewModel(
         appendOptimistic(userMessage)
         _isTyping.value = true
         _companionBrainState.value = CompanionBrainState.Loading
-        _chatStatus.value = null
+        _chatStatus.value = "LunaKai is thinking..."
+        warmUpLocalModelIfNeeded()
 
         viewModelScope.launch {
-            launch { saveMessage(userMessage, companion.name) }
-
-            val localContext = companionContext.copy(
-                adultProviderEndpoint = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
-                adultProviderModel = LunaKaiLocalConfig.OLLAMA_MODEL,
-                adultProviderEnabled = true,
-            )
-            val result = if (
-                localContext.bdsmEnabled &&
-                localContext.bdsmAdultConsentConfirmed &&
-                localContext.adultProviderEnabled
-            ) {
-                adultRoleplayRepository.sendMessage(localContext, trimmed, history)
-            } else {
-                ollamaRepository.sendMessage(localContext, trimmed, history)
+            val waitStatusJob = launch {
+                delay(4_500L)
+                if (_isTyping.value) _chatStatus.value = "Still waiting on the local model..."
             }
 
-            when (result) {
-                CompanionBrainState.Loading -> Unit
+            try {
+                launch { saveMessage(userMessage, companion.name) }
 
-                is CompanionBrainState.Success -> {
-                    val reply = newMessage(
-                        chatId = chatId,
-                        companionId = companion.id,
-                        sender = ChatMessage.SENDER_COMPANION,
-                        text = result.text,
-                        mode = mode,
-                    )
-                    appendOptimistic(reply)
-                    _companionBrainState.value = result
-                    launch { saveMessage(reply, companion.name) }
+                val localContext = companionContext.copy(
+                    adultProviderEndpoint = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
+                    adultProviderModel = LunaKaiLocalConfig.OLLAMA_MODEL,
+                    adultProviderEnabled = true,
+                )
+                val result = if (
+                    localContext.bdsmEnabled &&
+                    localContext.bdsmAdultConsentConfirmed &&
+                    localContext.adultProviderEnabled
+                ) {
+                    adultRoleplayRepository.sendMessage(localContext, trimmed, history)
+                } else {
+                    ollamaRepository.sendMessage(localContext, trimmed, history)
                 }
 
-                is CompanionBrainState.Error -> {
-                    val reply = newMessage(
-                        chatId = chatId,
-                        companionId = companion.id,
-                        sender = ChatMessage.SENDER_SYSTEM,
-                        text = result.message,
-                        mode = mode,
-                    )
-                    appendOptimistic(reply)
-                    _companionBrainState.value = result
-                    launch { saveMessage(reply, companion.name) }
+                when (result) {
+                    CompanionBrainState.Loading -> Unit
+
+                    is CompanionBrainState.Success -> {
+                        val reply = newMessage(
+                            chatId = chatId,
+                            companionId = companion.id,
+                            sender = ChatMessage.SENDER_COMPANION,
+                            text = result.text,
+                            mode = mode,
+                        )
+                        appendOptimistic(reply)
+                        _companionBrainState.value = result
+                        _chatStatus.value = null
+                        launch { saveMessage(reply, companion.name) }
+                    }
+
+                    is CompanionBrainState.Error -> {
+                        val reply = newMessage(
+                            chatId = chatId,
+                            companionId = companion.id,
+                            sender = ChatMessage.SENDER_SYSTEM,
+                            text = result.message,
+                            mode = mode,
+                        )
+                        appendOptimistic(reply)
+                        _companionBrainState.value = result
+                        _chatStatus.value = result.message
+                        launch { saveMessage(reply, companion.name) }
+                    }
                 }
+            } finally {
+                waitStatusJob.cancel()
+                _isTyping.value = false
             }
-
-            _isTyping.value = false
         }
     }
-
     fun sendPreparedReply(
         companion: CompanionProfile,
         userText: String,

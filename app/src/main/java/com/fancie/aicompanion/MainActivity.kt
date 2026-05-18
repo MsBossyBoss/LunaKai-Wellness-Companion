@@ -21,8 +21,6 @@ import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.provider.MediaStore
 import android.speech.RecognizerIntent
-import android.speech.tts.TextToSpeech
-import android.speech.tts.Voice
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
@@ -526,19 +524,19 @@ private fun maleAvatarOptions() = listOf(
     AvatarOption("Saint", "saint_mock", R.drawable.saint_mock, "Calm, safe, and deeply steady."),
 )
 
-private const val LUNAKAI_PREFS = "lunakai_preferences"
+const val LUNAKAI_PREFS = "lunakai_preferences"
 private const val KEY_COMPANIONS = "companions_json"
 private const val KEY_ACTIVE_COMPANION = "active_companion_id"
 private const val FRESH_CHAT_GREETING = "Hey, There!"
 private const val CHAT_RESET_HEY_THERE_VERSION = 1
 private fun chatResetHeyThereKey(uid: String) = "chat_reset_hey_there_version_$uid"
 
-private fun Context.lunakaiPrefs() = getSharedPreferences(LUNAKAI_PREFS, Context.MODE_PRIVATE)
-private fun Context.prefString(key: String, default: String = "") = lunakaiPrefs().getString(key, default) ?: default
-private fun Context.prefBoolean(key: String, default: Boolean = false) = lunakaiPrefs().getBoolean(key, default)
-private fun Context.prefInt(key: String, default: Int = 0) = lunakaiPrefs().getInt(key, default)
-private fun Context.savePref(key: String, value: String) = lunakaiPrefs().edit().putString(key, value).apply()
-private fun Context.savePref(key: String, value: Boolean) = lunakaiPrefs().edit().putBoolean(key, value).apply()
+fun Context.lunakaiPrefs() = getSharedPreferences(LUNAKAI_PREFS, Context.MODE_PRIVATE)
+fun Context.prefString(key: String, default: String = "") = lunakaiPrefs().getString(key, default) ?: default
+fun Context.prefBoolean(key: String, default: Boolean = false) = lunakaiPrefs().getBoolean(key, default)
+fun Context.prefInt(key: String, default: Int = 0) = lunakaiPrefs().getInt(key, default)
+fun Context.savePref(key: String, value: String) = lunakaiPrefs().edit().putString(key, value).apply()
+fun Context.savePref(key: String, value: Boolean) = lunakaiPrefs().edit().putBoolean(key, value).apply()
 
 private fun Context.adminEmoIntelPrompt(): String {
     val traitNames = listOf(
@@ -551,40 +549,21 @@ private fun Context.adminEmoIntelPrompt(): String {
         "- $trait: $value/100"
     }
 }
-private fun Context.savePref(key: String, value: Int) = lunakaiPrefs().edit().putInt(key, value).apply()
+fun Context.savePref(key: String, value: Int) = lunakaiPrefs().edit().putInt(key, value).apply()
 
 private const val ADMIN_EMAIL = "fanciemusicllc@gmail.com"
 private const val ADMIN_PIN = "083380"
-private const val LUNAKAI_LOCAL_ENDPOINT = "http://192.168.1.114:11434/api/generate"
-private const val LUNAKAI_LOCAL_MODEL = "lunakai-ai-adult"
-private const val LUNAKAI_ADULT_MODEL = "lunakai-ai-adult"
+private val LUNAKAI_LOCAL_ENDPOINT: String get() = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT
+private val LUNAKAI_LOCAL_MODEL: String get() = LunaKaiLocalConfig.OLLAMA_MODEL
+private val LUNAKAI_ADULT_MODEL: String get() = LunaKaiLocalConfig.OLLAMA_MODEL
 
-private fun providerNameFromEndpoint(endpoint: String): String = when {
-    endpoint.contains("11434", ignoreCase = true) ||
-        endpoint.contains("localhost", ignoreCase = true) ||
-        endpoint.contains("192.168.", ignoreCase = true) -> "LunaKai Adult"
-    endpoint.contains("deepseek", ignoreCase = true) -> "DeepSeek"
-    endpoint.isBlank() || endpoint.contains("openrouter", ignoreCase = true) -> "OpenRouter"
-    endpoint.equals("gemini", ignoreCase = true) -> "Gemini"
-    else -> "Custom endpoint"
-}
+private fun providerNameFromEndpoint(endpoint: String): String = "LunaKai Adult"
 
-private fun endpointForProvider(provider: String, currentCustom: String = ""): String = when (provider) {
-    "LunaKai Adult", "LunaKai AI" -> LUNAKAI_LOCAL_ENDPOINT
-    "DeepSeek" -> AdultRoleplayRepository.DEEPSEEK_ENDPOINT
-    "Gemini" -> "gemini"
-    "Custom endpoint" -> currentCustom.ifBlank { "https://" }
-    else -> ""
-}
+private fun endpointForProvider(provider: String, currentCustom: String = ""): String = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT
 
-private fun modelForProvider(provider: String): String = when (provider) {
-    "LunaKai Adult", "LunaKai AI" -> LUNAKAI_LOCAL_MODEL
-    "DeepSeek" -> AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL
-    "Gemini" -> "gemini-2.5-flash"
-    else -> AdultRoleplayRepository.DEFAULT_ADULT_MODEL
-}
+private fun modelForProvider(provider: String): String = LunaKaiLocalConfig.OLLAMA_MODEL
 
-private val DEFAULT_ADMIN_PROVIDER_OPTIONS = listOf("LunaKai Adult", "Gemini", "OpenRouter", "DeepSeek", "Custom endpoint")
+private val DEFAULT_ADMIN_PROVIDER_OPTIONS = listOf("LunaKai Adult")
 
 private fun parseProviderOptions(raw: String): List<String> =
     raw.split("|")
@@ -593,15 +572,13 @@ private fun parseProviderOptions(raw: String): List<String> =
         .distinct()
         .take(10)
 
-private fun Context.adminProviderOptions(): List<String> =
-    parseProviderOptions(prefString("admin_providers", "")).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
+private fun Context.adminProviderOptions(): List<String> = DEFAULT_ADMIN_PROVIDER_OPTIONS
 
 private fun Context.saveAdminProviderOptions(options: List<String>) {
-    val protectedOptions = (listOf("LunaKai Adult") + options).distinct().take(10)
-    savePref("admin_providers", protectedOptions.joinToString("|"))
+    savePref("admin_providers", "LunaKai Adult")
 }
 
-private const val DEFAULT_CALL_ANSWER_PHRASES = "Hello\nHey there\nHey Babe\nI'm here with you"
+private const val DEFAULT_CALL_ANSWER_PHRASES = "Hello"
 private val CALL_RINGTONE_OPTIONS = listOf("Phone ringtone", "Device ringtone", "Choose from device", "LunaKai soft chime", "Notification chime", "Alarm tone", "Silent")
 private val NOTIFICATION_SOUND_OPTIONS = listOf("LunaKai soft chime", "Bright chime", "Calm chime", "Device notification", "Choose from device", "Silent")
 private val CALL_URGENCY_OPTIONS = listOf("Match companion traits", "Soft and patient", "Normal ring", "Persistent", "High urgency")
@@ -1062,7 +1039,17 @@ private suspend fun resetAllCompanionMessagesToFreshGreeting(context: Context, c
 private fun FancieApp() {
     val context = LocalContext.current
     var signedIn by remember { mutableStateOf(firebaseCurrentUserExists()) }
-    var route by remember { mutableStateOf(if (signedIn) AppRoute.Home else AppRoute.Welcome) }
+    val requestedRoute = context.findComponentActivity()?.intent?.getStringExtra("lunakai_route")
+    var route by remember {
+        mutableStateOf(
+            if (!signedIn) AppRoute.Welcome else when (requestedRoute) {
+                "incoming_call", "live_companion" -> AppRoute.LiveCompanionCall
+                "chat" -> AppRoute.Chat
+                "wellness" -> AppRoute.Wellness
+                else -> AppRoute.Home
+            },
+        )
+    }
     var hasAcceptedDisclaimer by remember { mutableStateOf(context.prefBoolean("has_accepted_disclaimer", true)) }
     var hideDisclaimerOnLaunch by remember { mutableStateOf(context.prefBoolean("hide_disclaimer_on_launch", false)) }
     var showDisclaimerOnLaunch by remember { mutableStateOf(context.prefBoolean("show_disclaimer_on_launch", true)) }
@@ -1242,7 +1229,7 @@ private fun FancieApp() {
 
     LaunchedEffect(route) {
         if (route !in listOf(AppRoute.LiveCompanionCall, AppRoute.LiveCompanion)) {
-            GeminiLiveCompanionRepository.stopSharedAudioConversation()
+            LocalLiveCompanionRepository.stopSharedAudioConversation()
         }
     }
 
@@ -1996,114 +1983,6 @@ private fun voiceForGender(gender: String, currentVoice: String): String {
 }
 
 private fun isMaleVoiceOption(voiceName: String): Boolean = voiceName in maleVoiceOptions()
-private fun voicePreviewPitch(voiceName: String): Float = when {
-    voiceName.equals("Midnight Male", ignoreCase = true) -> 0.54f
-    voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.55f
-    voiceName.equals("Slow Burn Male", ignoreCase = true) -> 0.55f
-    voiceName.equals("Velvet Lover Male", ignoreCase = true) -> 0.56f
-    voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.57f
-    voiceName.equals("Romantic Deep Male", ignoreCase = true) -> 0.57f
-    voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.58f
-    voiceName.equals("Bedroom Whisper Male", ignoreCase = true) -> 0.58f
-    voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.60f
-    voiceName.equals("Smoky Soft Male", ignoreCase = true) -> 0.60f
-    voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.61f
-    voiceName.equals("Soft Sexy Male", ignoreCase = true) -> 0.62f
-    voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.63f
-    voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.64f
-    voiceName.equals("Gentle Low Male", ignoreCase = true) -> 0.64f
-    voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.66f
-    voiceName.contains("Bright", ignoreCase = true) -> 1.18f
-    voiceName.contains("Whisper", ignoreCase = true) -> 0.94f
-    isMaleVoiceOption(voiceName) -> 0.62f
-    else -> 1.06f
-}
-
-private fun voicePreviewRate(voiceName: String): Float = when {
-    voiceName.equals("Midnight Male", ignoreCase = true) -> 0.74f
-    voiceName.equals("Bedroom Whisper Male", ignoreCase = true) -> 0.74f
-    voiceName.equals("Warm Whisper Male", ignoreCase = true) -> 0.76f
-    voiceName.equals("Slow Burn Male", ignoreCase = true) -> 0.76f
-    voiceName.equals("Low Velvet Male", ignoreCase = true) -> 0.78f
-    voiceName.equals("Velvet Lover Male", ignoreCase = true) -> 0.78f
-    voiceName.equals("Sultry Calm Male", ignoreCase = true) -> 0.80f
-    voiceName.equals("Soft Sexy Male", ignoreCase = true) -> 0.80f
-    voiceName.equals("Smoky Soft Male", ignoreCase = true) -> 0.80f
-    voiceName.equals("Silky Soft Male", ignoreCase = true) -> 0.82f
-    voiceName.equals("Smooth Low Male", ignoreCase = true) -> 0.82f
-    voiceName.equals("Romantic Deep Male", ignoreCase = true) -> 0.82f
-    voiceName.equals("Soft Romance Male", ignoreCase = true) -> 0.84f
-    voiceName.equals("Gentle Low Male", ignoreCase = true) -> 0.84f
-    voiceName.equals("Deep Smooth Male", ignoreCase = true) -> 0.86f
-    voiceName.equals("Protective Warm Male", ignoreCase = true) -> 0.88f
-    voiceName.contains("Whisper", ignoreCase = true) -> 0.82f
-    voiceName.contains("Calm", ignoreCase = true) || voiceName.contains("Soft", ignoreCase = true) -> 0.88f
-    else -> 0.95f
-}
-
-private fun voicePreviewSample(companionName: String): String {
-    val introName = companionName.ifBlank { "your companion" }
-    return "Hey, I'm $introName."
-}
-
-private fun installedEnglishVoices(engine: TextToSpeech): List<Voice> {
-    return engine.voices
-        ?.filter { voice -> voice.locale.language.equals(Locale.ENGLISH.language, ignoreCase = true) }
-        ?.sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }.thenByDescending { it.quality })
-        .orEmpty()
-}
-
-private fun voiceHasAnyMarker(voice: Voice, markers: List<String>): Boolean {
-    val searchable = buildString {
-        append(voice.name)
-        append(' ')
-        append(voice.locale.displayName)
-        voice.features?.forEach { feature ->
-            append(' ')
-            append(feature)
-        }
-    }.lowercase(Locale.US)
-    return markers.any { marker -> searchable.contains(marker) }
-}
-
-private fun isInstalledMaleVoice(voice: Voice): Boolean {
-    return voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark", "guy", "andrew", "brandon", "eric", "christopher"))
-        && !voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen", "jenny", "sara", "aria", "nancy"))
-}
-
-private fun isInstalledFemaleVoice(voice: Voice): Boolean {
-    return voiceHasAnyMarker(voice, listOf("female", "feminine", "woman", "samantha", "victoria", "susan", "karen", "jenny", "sara", "aria", "nancy"))
-        && !voiceHasAnyMarker(voice, listOf(" male", "_male", "-male", "#male", "masculine", " man ", "david", "james", "mark", "guy", "andrew", "brandon", "eric", "christopher"))
-}
-
-private fun bestInstalledVoiceForPreview(engine: TextToSpeech, voiceName: String): Voice? {
-    val englishVoices = installedEnglishVoices(engine)
-    if (englishVoices.isEmpty()) return null
-    val wantsMale = isMaleVoiceOption(voiceName)
-    val genderedMatches = englishVoices.filter { voice ->
-        if (wantsMale) isInstalledMaleVoice(voice) else isInstalledFemaleVoice(voice)
-    }
-    if (genderedMatches.isNotEmpty()) {
-        return genderedMatches[voiceOptionBucket(voiceName, genderedMatches.size)]
-    }
-    return if (wantsMale) {
-        val masculineOrNeutral = englishVoices.filterNot { isInstalledFemaleVoice(it) }
-        masculineOrNeutral.getOrNull(voiceOptionBucket(voiceName, masculineOrNeutral.size))
-    } else {
-        val feminineOrNeutral = englishVoices.filterNot { isInstalledMaleVoice(it) }
-        feminineOrNeutral.getOrNull(voiceOptionBucket(voiceName, feminineOrNeutral.size)) ?: englishVoices.first()
-    }
-}
-
-private fun voiceOptionBucket(voiceName: String, size: Int): Int {
-    if (size <= 1) return 0
-    val maleIndex = maleVoiceOptions().indexOf(voiceName)
-    if (maleIndex >= 0) return maleIndex % size
-    val femaleIndex = femaleVoiceOptions().indexOf(voiceName)
-    if (femaleIndex >= 0) return femaleIndex % size
-    return (voiceName.hashCode() and Int.MAX_VALUE) % size
-}
-
 private fun voicePreviewDescription(voiceName: String): String {
     val maleDescription = when {
         voiceName.equals("Deep Smooth Male", ignoreCase = true) -> "Low, smooth, relaxed"
@@ -2788,8 +2667,6 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
         calculateCompanionExperience(companion)
     }
     val context = LocalContext.current
-    val openRouterKey = context.prefString("openrouter_api_key", "")
-    val deepSeekKey = context.prefString("deepseek_api_key", "")
     val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
     val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
@@ -2808,8 +2685,8 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
         adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
         else -> globalAiModel
     }
-    val geminiContext = remember(companion, openRouterKey, deepSeekKey, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
-        GeminiCompanionContext(
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
+        CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
             gender = companion.gender,
@@ -2829,15 +2706,13 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             adultProviderEnabled = effectiveProviderEnabled,
             adultProviderEndpoint = effectiveEndpoint,
             adultProviderModel = effectiveModel,
-            openRouterApiKey = openRouterKey,
-            deepSeekApiKey = deepSeekKey,
             adminEmoIntelProfile = adminEmoIntelProfile,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
     val messages by chatViewModel.messages.collectAsState()
     val isTyping by chatViewModel.isTyping.collectAsState()
-    val geminiState by chatViewModel.geminiState.collectAsState()
+    val companionBrainState by chatViewModel.companionBrainState.collectAsState()
     val chatStatus by chatViewModel.chatStatus.collectAsState()
     val displayMessages = messages.ifEmpty {
         listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = stableChatIdForCompanion(companion.id), companionId = companion.id, text = FRESH_CHAT_GREETING))
@@ -2863,10 +2738,10 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                 if (isTyping) ThinkingBubble(companion.name)
             }
             GlassCard(padding = 10.dp) {
-                when (val state = geminiState) {
-                    GeminiCompanionState.Loading -> Text("${companion.name} is connecting to LunaKai AI...", color = TextMuted, fontSize = 12.sp)
-                    is GeminiCompanionState.Error -> Text(state.message, color = WarningPeach, fontSize = 12.sp, lineHeight = 16.sp)
-                    is GeminiCompanionState.Success, null -> Unit
+                when (val state = companionBrainState) {
+                    CompanionBrainState.Loading -> Text("${companion.name} is connecting to LunaKai AI...", color = TextMuted, fontSize = 12.sp)
+                    is CompanionBrainState.Error -> Text(state.message, color = WarningPeach, fontSize = 12.sp, lineHeight = 16.sp)
+                    is CompanionBrainState.Success, null -> Unit
                 }
                 chatStatus?.let {
                     Text(it, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
@@ -2895,7 +2770,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                     SmallCircleButton("send") {
                         if (input.isNotBlank() && !isTyping) {
                             val userText = input.trim()
-                            val history = messages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
+                            val history = messages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
                             val bdsmSetupResponse = nextBdsmSetupResponse(companion, bdsmSessionState, userText)
                             input = ""
                             if (bdsmSetupResponse != null) {
@@ -2903,7 +2778,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                                 bdsmSessionState = nextState
                                 chatViewModel.sendPreparedReply(companion, userText, reply, ChatMessage.MODE_TEXT)
                             } else {
-                                chatViewModel.sendMessage(companion, geminiContext, userText, history, ChatMessage.MODE_TEXT)
+                                chatViewModel.sendMessage(companion, companionContext, userText, history, ChatMessage.MODE_TEXT)
                             }
                         }
                     }
@@ -2959,15 +2834,12 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
     val micGlow by animateFloatAsState(if (state.isMicOn) 1f else 0f, label = "mic-glow")
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val liveRepository = remember { GeminiLiveCompanionRepository() }
+    val liveRepository = remember { LocalLiveCompanionRepository() }
     val callAnswerStyle = context.prefString(voiceSettingKey(companion.id, "answerStyle"), "Answer with voice and text")
     val callAnswerPhrases = context.prefString(voiceSettingKey(companion.id, "answerPhrases"), DEFAULT_CALL_ANSWER_PHRASES)
     val callRingtoneChoice = context.prefString(voiceSettingKey(companion.id, "ringtoneChoice"), CALL_RINGTONE_OPTIONS.first())
     val callRingtoneUri = context.prefString(voiceSettingKey(companion.id, "ringtoneUri"), "")
     val callUrgency = context.prefString(voiceSettingKey(companion.id, "answerUrgency"), CALL_URGENCY_OPTIONS.first())
-
-    val openRouterKey = context.prefString("openrouter_api_key", "")
-    val deepSeekKey = context.prefString("deepseek_api_key", "")
     val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
     val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
@@ -2986,8 +2858,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
         adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
         else -> globalAiModel
     }
-    val geminiContext = remember(companion, openRouterKey, deepSeekKey, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
-        GeminiCompanionContext(
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
+        CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
             gender = companion.gender,
@@ -3007,17 +2879,15 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             adultProviderEnabled = effectiveProviderEnabled,
             adultProviderEndpoint = effectiveEndpoint,
             adultProviderModel = effectiveModel,
-            openRouterApiKey = openRouterKey,
-            deepSeekApiKey = deepSeekKey,
             adminEmoIntelProfile = adminEmoIntelProfile,
         )
     }
-    var liveSessionState by remember { mutableStateOf<GeminiLiveSessionState>(GeminiLiveSessionState.Idle) }
+    var liveSessionState by remember { mutableStateOf<LocalLiveSessionState>(LocalLiveSessionState.Idle) }
     var cameraEnabled by remember { mutableStateOf(false) }
     var pendingLiveMode by remember { mutableStateOf<LiveMode?>(null) }
     var pendingAnswerPhrase by remember { mutableStateOf<String?>(null) }
     var permissionMessage by remember { mutableStateOf<String?>(null) }
-    fun startGeminiLive(mode: LiveMode, answerPhrase: String? = null) {
+    fun startLocalLive(mode: LiveMode, answerPhrase: String? = null) {
         val modeLabel = when (mode) {
             LiveMode.VOICE -> "voice call"
             LiveMode.TEXT -> "text chat"
@@ -3032,20 +2902,20 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             currentCaption = answerCaption ?: "Connecting voice. When it is ready, speak naturally to ${companion.name}.",
         )
         cameraEnabled = false
-        liveSessionState = GeminiLiveSessionState.Connecting
+        liveSessionState = LocalLiveSessionState.Connecting
         scope.launch {
-            val result = liveRepository.startAudioConversation(geminiContext, modeLabel, answerPhrase)
+            val result = liveRepository.startAudioConversation(companionContext, modeLabel, answerPhrase)
             liveSessionState = result
             state = when (result) {
-                GeminiLiveSessionState.Idle,
-                GeminiLiveSessionState.Connecting -> state
-                is GeminiLiveSessionState.Connected -> state.copy(
+                LocalLiveSessionState.Idle,
+                LocalLiveSessionState.Connecting -> state
+                is LocalLiveSessionState.Connected -> state.copy(
                     callStatus = "Voice connected",
                     isMicOn = true,
                     isUserSpeaking = true,
                     currentCaption = answerCaption ?: "${companion.name} can hear you now. Speak when you're ready.",
                 )
-                is GeminiLiveSessionState.Error -> state.copy(
+                is LocalLiveSessionState.Error -> state.copy(
                     callStatus = "Voice setup needs attention",
                     isMicOn = false,
                     isUserSpeaking = false,
@@ -3065,7 +2935,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             permissionMessage = "Voice mode needs microphone permission before it can start."
         } else if (mode != null) {
             permissionMessage = null
-            startGeminiLive(mode, answerPhrase)
+            startLocalLive(mode, answerPhrase)
         }
     }
     val livePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -3121,7 +2991,7 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             livePhotoLauncher.launch(intent)
         }
     }
-    fun requestOrStartGeminiLive(mode: LiveMode, answerPhrase: String? = null) {
+    fun requestOrStartLocalLive(mode: LiveMode, answerPhrase: String? = null) {
         val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
         val missing = requiredPermissions.filterNot { context.hasPermission(it) }
         if (missing.isNotEmpty()) {
@@ -3131,12 +3001,12 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
             livePermissionLauncher.launch(missing.toTypedArray())
         } else {
             permissionMessage = null
-            startGeminiLive(mode, answerPhrase)
+            startLocalLive(mode, answerPhrase)
         }
     }
 
     fun ringCompanionThenStartCall() {
-        if (state.isMicOn || liveSessionState is GeminiLiveSessionState.Connected || liveSessionState is GeminiLiveSessionState.Connecting) {
+        if (state.isMicOn || liveSessionState is LocalLiveSessionState.Connected || liveSessionState is LocalLiveSessionState.Connecting) {
             return
         }
         val answerPhrase = selectedCallAnswerPhrase(callAnswerPhrases, companion.name)
@@ -3163,16 +3033,16 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                     "${companion.name} answered. Listen for the voice greeting."
                 },
             )
-            requestOrStartGeminiLive(
+            requestOrStartLocalLive(
                 LiveMode.VOICE,
                 answerPhrase.takeIf { shouldSpeakAnswer },
             )
         }
     }
-    fun stopGeminiLive() {
+    fun stopLocalLive() {
         scope.launch {
             liveRepository.stopAudioConversation()
-            liveSessionState = GeminiLiveSessionState.Idle
+            liveSessionState = LocalLiveSessionState.Idle
             cameraEnabled = false
             state = state.copy(
                 isMicOn = false,
@@ -3281,14 +3151,14 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                             ringCompanionThenStartCall()
                         }
                         CallControlButton("Mic", R.drawable.ic_mic, state.isMicOn, RosePink.copy(alpha = 0.18f + micGlow * 0.42f)) {
-                            if (state.isMicOn) stopGeminiLive() else requestOrStartGeminiLive(LiveMode.VOICE)
+                            if (state.isMicOn) stopLocalLive() else requestOrStartLocalLive(LiveMode.VOICE)
                         }
                         CallControlButton("Speaker", R.drawable.ic_speaker, state.isSpeakerOn, CalmBlue) {
                             state = state.copy(isSpeakerOn = !state.isSpeakerOn)
                         }
                         CallControlButton("Photo", R.drawable.ic_capture, showCaptureSheet, SuccessGreen) { showCaptureSheet = true }
                         CallControlButton("End", R.drawable.ic_call_end, false, WarningPeach) {
-                            stopGeminiLive()
+                            stopLocalLive()
                             showEndCallPrompt = true
                         }
                     }
@@ -3392,8 +3262,8 @@ private fun LiveCompanionCallScreen(companion: CompanionProfile, onNavigate: (Ap
                                             LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
-                                        val history = chatMessages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { GeminiChatTurn(text = it.text, isUser = it.isUser) }
-                                        chatViewModel.sendMessage(companion, geminiContext, userText, history, mode)
+                                        val history = chatMessages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+                                        chatViewModel.sendMessage(companion, companionContext, userText, history, mode)
                                         state = state.copy(currentCaption = userText, isUserSpeaking = true, isCompanionSpeaking = false)
                                         textInput = ""
                                     }},
@@ -3421,7 +3291,7 @@ private fun CallControlButton(label: String, iconResId: Int, active: Boolean, co
                     if (active) color.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.18f),
                     CircleShape,
                 )
-                .clickable(onClick = onClick),
+                .clickable(onClick = hapticAction(onClick)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -3448,7 +3318,7 @@ private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
                 },
             )
             .border(1.dp, Color.White.copy(alpha = 0.62f), PillShape)
-            .clickable(onClick = onClick)
+            .clickable(onClick = hapticAction(onClick))
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Text(label, color = if (selected) Color.White else TextDark, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
@@ -3487,16 +3357,16 @@ private fun callDisplayStatus(state: LiveCompanionCallUiState): String {
 
 @Composable
 private fun LiveSessionStatusCard(
-    liveSessionState: GeminiLiveSessionState,
+    liveSessionState: LocalLiveSessionState,
     permissionMessage: String?,
 ) {
     val message = when (liveSessionState) {
-        GeminiLiveSessionState.Idle -> permissionMessage
-        GeminiLiveSessionState.Connecting -> "Connecting to live voice..."
-        is GeminiLiveSessionState.Connected -> liveSessionState.message
-        is GeminiLiveSessionState.Error -> liveSessionState.message
+        LocalLiveSessionState.Idle -> permissionMessage
+        LocalLiveSessionState.Connecting -> "Connecting to live voice..."
+        is LocalLiveSessionState.Connected -> liveSessionState.message
+        is LocalLiveSessionState.Error -> liveSessionState.message
     } ?: return
-    val isError = liveSessionState is GeminiLiveSessionState.Error || permissionMessage != null
+    val isError = liveSessionState is LocalLiveSessionState.Error || permissionMessage != null
     GlassCard(background = if (isError) WarningPeach.copy(alpha = 0.18f) else CardDark.copy(alpha = 0.94f)) {
         Text(
             if (isError) "Live setup" else "Live connected",
@@ -3517,7 +3387,7 @@ private fun CameraPreviewPanel(
     GlassCard(background = CardDark.copy(alpha = 0.94f)) {
         Text("Video Preview", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text(
-            "Use this to test the video side of the live companion call. Gemini voice can run with it while camera-frame understanding is prepared.",
+            "Use this to test the camera preview for a future local avatar pipeline. Live voice uses local providers only.",
             color = TextMuted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
@@ -4304,56 +4174,10 @@ private fun RoleplayDetails(
             )
         }
         adultRoleplaySelected -> {
-            val settingsContext = LocalContext.current
-            var openRouterKey by remember { mutableStateOf(settingsContext.prefString("openrouter_api_key", "")) }
-            var deepSeekKey by remember { mutableStateOf(settingsContext.prefString("deepseek_api_key", "")) }
-            var showAdultProviderSetup by remember { mutableStateOf(false) }
             var showAdultPhraseSetup by remember { mutableStateOf(false) }
-            val providerName = providerNameFromEndpoint(bdsmIdentitySettings.adultProviderEndpoint)
-            val activeProviderKey = when (providerName) {
-                "DeepSeek" -> deepSeekKey
-                "LunaKai Adult" -> ""
-                else -> openRouterKey
-            }
-
-            fun selectAdultProvider(choice: String) {
-                val updatedSettings = when (choice) {
-                    "LunaKai Adult" -> bdsmIdentitySettings.copy(
-                        adultProviderEnabled = false,
-                        adultProviderEndpoint = LUNAKAI_LOCAL_ENDPOINT,
-                        adultProviderModel = LUNAKAI_ADULT_MODEL,
-                    )
-
-                    "OpenRouter" -> bdsmIdentitySettings.copy(
-                        adultProviderEnabled = true,
-                        adultProviderEndpoint = "",
-                        adultProviderModel = AdultRoleplayRepository.DEFAULT_ADULT_MODEL,
-                    )
-
-                    "DeepSeek" -> bdsmIdentitySettings.copy(
-                        adultProviderEnabled = true,
-                        adultProviderEndpoint = AdultRoleplayRepository.DEEPSEEK_ENDPOINT,
-                        adultProviderModel = AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL,
-                    )
-
-                    "Gemini" -> bdsmIdentitySettings.copy(
-                        adultProviderEnabled = false,
-                        adultProviderEndpoint = "gemini",
-                        adultProviderModel = "gemini-2.5-flash",
-                    )
-
-                    "Custom endpoint" -> bdsmIdentitySettings.copy(
-                        adultProviderEnabled = true,
-                        adultProviderEndpoint = bdsmIdentitySettings.adultProviderEndpoint.ifBlank { "https://" },
-                    )
-
-                    else -> bdsmIdentitySettings
-                }
-                onBdsmIdentitySettingsChange(updatedSettings)
-            }
             GlassCard(background = WarningPeach.copy(alpha = 0.18f), padding = 14.dp) {
                 Text("RolePlay Mode Enabled", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("This companion can support adult consent-based fantasy roleplay through chat. Boundaries, roles, and safewords will be established before roleplay begins.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
+                Text("This companion can support consenting fictional adult roleplay through the local LunaKai Adult Ollama model. Boundaries, roles, and safewords stay tied to this companion.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
             RoundedInputField(boundaries, onBoundariesChange, "What is your Fantasy?", minLines = 3)
             ToggleRow("I understand this mode is for consenting adults only.", bdsmIdentitySettings.adultConsentConfirmed, onBdsmConsentChange)
@@ -4384,80 +4208,18 @@ private fun RoleplayDetails(
                 )
             }
             HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
-            ToggleRow("Use adult AI provider", bdsmIdentitySettings.adultProviderEnabled) { enabled ->
-                if (enabled) {
-                    if (providerName == "LunaKai Adult") selectAdultProvider("OpenRouter") else onAdultProviderEnabledChange(true)
-                    showAdultProviderSetup = true
-                } else {
-                    onAdultProviderEnabledChange(false)
-                }
+            ToggleRow("Use LunaKai Adult local model", true) {
+                onAdultProviderEnabledChange(true)
+                onAdultProviderEndpointChange(LUNAKAI_LOCAL_ENDPOINT)
+                onAdultProviderModelChange(LUNAKAI_ADULT_MODEL)
             }
-            Text(
-                "Routes adult-mode messages through the selected provider after the consent and safety gates pass. LunaKai Adult uses your local Ollama model at home; OpenRouter or DeepSeek can be used away from home with an API key.",
-                color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp,
-            )
-            ToggleRow("Use LunaKai Adult local model", providerName == "LunaKai Adult") { enabled ->
-                if (enabled) {
-                    selectAdultProvider("LunaKai Adult")
-                } else {
-                    selectAdultProvider("Gemini")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (providerName == "LunaKai Adult") {
-                    MiniStateCard("LunaKai Adult", "Uses local Ollama model lunakai-ai-adult on your home Wi-Fi")
-                } else {
-                    SolidInputField(
-                        value = activeProviderKey,
-                        onValueChange = { key ->
-                            if (providerName == "DeepSeek") {
-                                deepSeekKey = key
-                                settingsContext.savePref("deepseek_api_key", key)
-                            } else {
-                                openRouterKey = key
-                                settingsContext.savePref("openrouter_api_key", key)
-                            }
-                        },
-                        label = "$providerName API key",
-                        placeholder = if (providerName == "DeepSeek") "sk-..." else "sk-or-v1-...",
-                        modifier = Modifier.weight(1f),
-                        visualTransformation = PasswordVisualTransformation(),
-                    )
-                }
-                SecondarySoftButton("Options", modifier = Modifier.width(112.dp), onClick = { showAdultProviderSetup = true })
-            }
-            MiniStateCard("Provider", providerName)
-            MiniStateCard("Model", bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL })
-            MiniStateCard("Safety filter", "Blocks minors, non-consent, illegal content, and real harm before provider calls")
+            Text("Adult-mode messages route through the local Ollama endpoint and model saved in LunaKai local config. No cloud API key is used.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+            MiniStateCard("Provider", "LunaKai Adult local")
+            MiniStateCard("Endpoint", LUNAKAI_LOCAL_ENDPOINT)
+            MiniStateCard("Model", LUNAKAI_ADULT_MODEL)
+            MiniStateCard("Safety filter", "Blocks minors, non-consent, blackmail, real-person sexual impersonation, illegal content, and real harm before model calls")
             MiniStateCard("Default stop word", bdsmIdentitySettings.defaultStopWord)
             MiniStateCard("Default pause word", bdsmIdentitySettings.defaultPauseWord)
-
-            if (showAdultProviderSetup) {
-                AdultProviderSetupDialog(
-                    providerName = providerName,
-                    openRouterKey = openRouterKey,
-                    onOpenRouterKeyChange = { key ->
-                        openRouterKey = key
-                        settingsContext.savePref("openrouter_api_key", key)
-                    },
-                    deepSeekKey = deepSeekKey,
-                    onDeepSeekKeyChange = { key ->
-                        deepSeekKey = key
-                        settingsContext.savePref("deepseek_api_key", key)
-                    },
-                    modelName = if (providerName == "LunaKai Adult") LUNAKAI_ADULT_MODEL else bdsmIdentitySettings.adultProviderModel.ifBlank { AdultRoleplayRepository.DEFAULT_ADULT_MODEL },
-                    onModelNameChange = onAdultProviderModelChange,
-                    customEndpoint = bdsmIdentitySettings.adultProviderEndpoint,
-                    onCustomEndpointChange = onAdultProviderEndpointChange,
-                    onAdultProviderEnabledChange = onAdultProviderEnabledChange,
-                    onProviderChoiceChange = { choice -> selectAdultProvider(choice) },
-                    onDismiss = { showAdultProviderSetup = false },
-                )
-            }
         }
         else -> {
             Text("Supportive wellness guidance, grounding, reflection, and encouragement. This mode is for wellness support only and does not diagnose, treat, or replace professional care.", color = TextMuted, lineHeight = 20.sp)
@@ -4468,102 +4230,6 @@ private fun RoleplayDetails(
             )
         }
     }
-}
-
-@Composable
-private fun AdultProviderSetupDialog(
-    providerName: String,
-    openRouterKey: String,
-    onOpenRouterKeyChange: (String) -> Unit,
-    deepSeekKey: String,
-    onDeepSeekKeyChange: (String) -> Unit,
-    modelName: String,
-    onModelNameChange: (String) -> Unit,
-    customEndpoint: String,
-    onCustomEndpointChange: (String) -> Unit,
-    onAdultProviderEnabledChange: (Boolean) -> Unit,
-    onProviderChoiceChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = CardDark,
-        title = { Text("Adult AI Provider", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Choose which AI provider powers adult private mode. LunaKai Adult uses your local Ollama model when you are home. OpenRouter or DeepSeek can be used away from home with an API key. Custom endpoint is for another OpenAI-compatible server.",
-                    color = TextMuted,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                )
-                SoftDropdown(
-                    label = "Provider",
-                    selected = providerName,
-                    options = listOf("LunaKai Adult", "Gemini", "OpenRouter", "DeepSeek", "Custom endpoint"),
-                    onSelected = onProviderChoiceChange,
-                )
-                if (providerName == "LunaKai Adult") {
-                    MiniStateCard("No API key needed", "Uses $LUNAKAI_LOCAL_ENDPOINT with model $LUNAKAI_ADULT_MODEL")
-                    SolidInputField(
-                        value = customEndpoint.ifBlank { LUNAKAI_LOCAL_ENDPOINT },
-                        onValueChange = onCustomEndpointChange,
-                        label = "LunaKai Adult local endpoint",
-                        placeholder = LUNAKAI_LOCAL_ENDPOINT,
-                    )
-                    SolidInputField(
-                        value = modelName.ifBlank { LUNAKAI_ADULT_MODEL },
-                        onValueChange = onModelNameChange,
-                        label = "LunaKai Adult model",
-                        placeholder = LUNAKAI_ADULT_MODEL,
-                    )
-                } else {
-                    if (providerName == "OpenRouter" || providerName == "Custom endpoint") {
-                        SolidInputField(
-                            value = openRouterKey,
-                            onValueChange = onOpenRouterKeyChange,
-                            label = "OpenRouter API key",
-                            placeholder = "sk-or-v1-...",
-                            visualTransformation = PasswordVisualTransformation(),
-                        )
-                    }
-                    if (providerName == "DeepSeek") {
-                        SolidInputField(
-                            value = deepSeekKey,
-                            onValueChange = onDeepSeekKeyChange,
-                            label = "DeepSeek API key",
-                            placeholder = "sk-...",
-                            visualTransformation = PasswordVisualTransformation(),
-                        )
-                    }
-                    SoftDropdown(
-                        label = "Adult AI model",
-                        selected = modelName,
-                        options = AdultRoleplayRepository.RECOMMENDED_MODELS,
-                        onSelected = onModelNameChange,
-                    )
-                    SolidInputField(
-                        value = customEndpoint,
-                        onValueChange = onCustomEndpointChange,
-                        label = "Custom endpoint",
-                        placeholder = "Leave blank for OpenRouter",
-                    )
-                    Text(
-                        "Custom endpoints are normalized automatically. Blank or openrouter.ai uses OpenRouter; api.deepseek.com uses DeepSeek.",
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done", color = DeepRose) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close", color = TextMuted) }
-        },
-    )
 }
 
 @Composable
@@ -5615,7 +5281,7 @@ private fun PreferencesScreen(
                         globalAiProvider = provider
                         globalAiEndpoint = endpointForProvider(provider, globalAiEndpoint)
                         globalAiModel = modelForProvider(provider)
-                        if (provider != "LunaKai Adult" && provider != "Gemini") showProviderDialog = true
+                        showProviderDialog = false
                     },
                 )
                 MiniStateCard("Endpoint", globalAiEndpoint)
@@ -6372,61 +6038,77 @@ private fun VoiceLiveSettingsScreen(
     }
 
     val voicePreviewScope = rememberCoroutineScope()
-    var voicePreviewReady by remember { mutableStateOf(false) }
-    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to hear a device preview.") }
-    var voicePreviewEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+    val voicePreviewRepository = remember { LocalLiveCompanionRepository() }
+    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to request a local voice preview.") }
+    var pendingVoicePreview by remember { mutableStateOf<String?>(null) }
 
-    DisposableEffect(context) {
-        var initializedEngine: TextToSpeech? = null
-        val engine = TextToSpeech(context) { status ->
-            voicePreviewReady = status == TextToSpeech.SUCCESS
-            if (status == TextToSpeech.SUCCESS) {
-                initializedEngine?.language = Locale.US
-                voicePreviewStatus = "Voice preview is ready. Live listening stays off until you start a call."
-            } else {
-                voicePreviewStatus = "Voice preview is not available on this device yet."
+    fun previewGenderFor(voiceName: String): String = when {
+        isMaleVoiceOption(voiceName) -> "Male"
+        voiceName in femaleVoiceOptions() -> "Female"
+        else -> companion.gender
+    }
+
+    fun localPreviewContext(voiceName: String): CompanionContext = CompanionContext(
+        companionId = companion.id,
+        companionName = companion.name,
+        gender = previewGenderFor(voiceName),
+        voice = voiceName,
+        characterMode = companion.characterMode,
+        personalityTraits = companion.personalityTraits.ifEmpty { companion.personalityTags },
+        communicationStyle = companion.communicationStyle,
+        supportFocus = companion.supportFocus.toList(),
+        shortDescription = companion.shortDescription,
+        roleplayStyles = companion.activeRoleplayStyles(),
+        bdsmEnabled = companion.isAdultRoleplayEnabled(),
+        bdsmAdultConsentConfirmed = companion.bdsmIdentitySettings.adultConsentConfirmed,
+        bdsmStopWord = companion.bdsmIdentitySettings.defaultStopWord,
+        bdsmPauseWord = companion.bdsmIdentitySettings.defaultPauseWord,
+        anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
+        adultPhrasePreferences = companion.bdsmIdentitySettings.preferredAdultPhrases,
+        adminEmoIntelProfile = context.adminEmoIntelPrompt(),
+    )
+
+    fun startLocalVoicePreview(voiceName: String) {
+        voicePreviewStatus = "Requesting $voiceName local voice preview."
+        voicePreviewScope.launch {
+            val previewLine = "Hey, I'm ${companion.name}."
+            val result = voicePreviewRepository.startAudioConversation(
+                companion = localPreviewContext(voiceName),
+                modeLabel = "voice settings preview",
+                answerPhrase = previewLine,
+            )
+            when (result) {
+                LocalLiveSessionState.Idle,
+                LocalLiveSessionState.Connecting -> Unit
+                is LocalLiveSessionState.Connected -> {
+                    delay(3600)
+                    voicePreviewStatus = "$voiceName preview finished."
+                }
+                is LocalLiveSessionState.Error -> voicePreviewStatus = result.message
             }
+            voicePreviewRepository.stopAudioConversation()
         }
-        initializedEngine = engine
-        voicePreviewEngine = engine
-        onDispose {
-            engine.stop()
-            engine.shutdown()
-            voicePreviewEngine = null
+    }
+
+    val voicePreviewPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val voiceName = pendingVoicePreview
+        pendingVoicePreview = null
+        if (granted && voiceName != null) {
+            startLocalVoicePreview(voiceName)
+        } else {
+            voicePreviewStatus = "Local voice preview needs the local voice server."
         }
     }
 
     fun playVoicePreview(voiceName: String) {
-        if (!speaker) {
-            voicePreviewStatus = "Speaker output is off. Turn it on to hear voice previews."
-            return
-        }
-        val engine = voicePreviewEngine
-        if (!voicePreviewReady || engine == null) {
-            voicePreviewStatus = "Voice preview is still loading. Try again in a moment."
-            return
-        }
-        voicePreviewStatus = "Preparing $voiceName preview. Live listening is paused."
-        voicePreviewScope.launch {
-            GeminiLiveCompanionRepository.stopSharedAudioConversation()
-            engine.stop()
-            engine.language = Locale.US
-            val installedVoice = bestInstalledVoiceForPreview(engine, voiceName)
-            if (installedVoice != null) {
-                engine.voice = installedVoice
-            }
-            engine.setPitch(voicePreviewPitch(voiceName))
-            engine.setSpeechRate(voicePreviewRate(voiceName))
-            voicePreviewStatus = "Playing $voiceName device preview. Microphone input stays off."
-            engine.speak(
-                voicePreviewSample(companion.name),
-                TextToSpeech.QUEUE_FLUSH,
-                null,
-                "voice_preview_${voiceName.filter { it.isLetterOrDigit() }}",
-            )
-        }
+        startLocalVoicePreview(voiceName)
     }
 
+    DisposableEffect(voicePreviewRepository) {
+        onDispose {
+            voicePreviewScope.launch { voicePreviewRepository.stopAudioConversation() }
+        }
+    }
     GradientBackground {
         ScreenScroll {
             SectionHeader("Voice controls", "Choose companion voice, wake phrase, audio source, and voice training.")
@@ -6459,7 +6141,7 @@ private fun VoiceLiveSettingsScreen(
                 ToggleRow("Speaker output", speaker) { speaker = it }
                 MiniStateCard("Output from device", if (speaker) "Voice samples and replies play through speaker/Bluetooth." else "Speaker output is muted.")
                 MiniStateCard("Input into app", if (microphone) "Microphone can listen only in live call or training." else "Microphone input is off.")
-                Text("Voice previews are one-shot samples. They stop Gemini Live listening before playback so ${companion.name} does not answer the preview.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Voice previews are one-shot local provider samples and do not open the live microphone.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Wake phrase", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -6606,61 +6288,119 @@ private fun PrivacySettingsScreen() {
 
 @Composable
 private fun NotificationSettingsScreen(companion: CompanionProfile) {
-    var dailyPrompt by remember { mutableStateOf(true) }
-    var checkIns by remember { mutableStateOf(true) }
-    var journalReminders by remember { mutableStateOf(false) }
-    var crisisNudges by remember { mutableStateOf(true) }
-    var companionNotifications by remember { mutableStateOf(true) }
-    var urgencyMode by remember { mutableStateOf("Calculated from character preferences") }
-    var quietHours by remember { mutableStateOf(true) }
-    var characterMode by remember(companion.id) { mutableStateOf(companion.characterMode) }
-    var supportFocus by remember(companion.id) { mutableStateOf(companion.supportFocus.firstOrNull() ?: "Stress") }
-    var notificationStyle by remember { mutableStateOf("Calculated from character preferences") }
-    calculateCompanionExperience(
-        companion = companion,
-        characterModeOverride = characterMode,
-        supportFocusOverride = supportFocus,
-        urgencyOverride = urgencyMode,
-    )
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        context.savePref("settings_notification_permission_granted", granted)
+    }
+    var companionNotifications by remember { mutableStateOf(context.prefBoolean("settings_companion_notifications_enabled", false)) }
+    var wellnessNotifications by remember { mutableStateOf(context.prefBoolean("settings_wellness_notifications_enabled", true)) }
+    var roleplayNotifications by remember { mutableStateOf(context.prefBoolean("settings_roleplay_notifications_enabled", false)) }
+    var allowCompanionCalls by remember { mutableStateOf(context.prefBoolean("settings_companion_calls_enabled", false)) }
+    var adultPreview by remember { mutableStateOf(context.prefBoolean("settings_adult_notification_previews", false)) }
+    var frequency by remember { mutableStateOf(context.prefString("settings_notification_frequency", "Daily")) }
+    var quietHoursEnabled by remember { mutableStateOf(context.prefBoolean("settings_quiet_hours_enabled", true)) }
+    var quietHours by remember { mutableStateOf(context.prefString("settings_notification_quiet_hours", "10:00 PM - 8:00 AM")) }
+    var notificationType by remember { mutableStateOf(context.prefString("settings_notification_type", "Companion attention message")) }
+    var roleplayFlavor by remember { mutableStateOf(context.prefBoolean("settings_roleplay_flavored_notifications", false)) }
+    var permissionStatus by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+                "Notifications are allowed on this device."
+            } else {
+                "Android notification permission has not been granted yet."
+            },
+        )
+    }
+
+    LaunchedEffect(companionNotifications) {
+        if (companionNotifications && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            permissionStatus = "Android asked for notification permission."
+        }
+    }
+
+    LaunchedEffect(
+        companionNotifications,
+        wellnessNotifications,
+        roleplayNotifications,
+        allowCompanionCalls,
+        adultPreview,
+        frequency,
+        quietHoursEnabled,
+        quietHours,
+        notificationType,
+        roleplayFlavor,
+    ) {
+        context.savePref("settings_companion_notifications_enabled", companionNotifications)
+        context.savePref("settings_wellness_notifications_enabled", wellnessNotifications)
+        context.savePref("settings_roleplay_notifications_enabled", roleplayNotifications)
+        context.savePref("settings_companion_calls_enabled", allowCompanionCalls)
+        context.savePref("settings_adult_notification_previews", adultPreview)
+        context.savePref("settings_notification_frequency", frequency)
+        context.savePref("settings_quiet_hours_enabled", quietHoursEnabled)
+        context.savePref("settings_notification_quiet_hours", if (quietHoursEnabled) quietHours else "")
+        context.savePref("settings_notification_type", notificationType)
+        context.savePref("settings_roleplay_flavored_notifications", roleplayFlavor)
+        if (companionNotifications) CompanionNotificationScheduler.scheduleNext(context) else CompanionNotificationScheduler.cancel(context)
+    }
 
     GradientBackground {
         ScreenScroll {
-            SectionHeader("Reminder controls", "Choose companion notifications, urgency, and gentle prompts.")
+            SectionHeader("Reminder controls", "Local opt-in reminders, call invitations, previews, and quiet hours.")
             GlassCard {
-                Text("Companion Notifications", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                ToggleRow("Allow companion to notify me", companionNotifications) { companionNotifications = it }
-                SoftDropdown(
-                    label = "Character mode",
-                    selected = characterMode,
-                    options = characterModeOptions(),
-                    onSelected = { characterMode = it },
-                )
-                SoftDropdown(
-                    label = "Support focus",
-                    selected = supportFocus,
-                    options = supportFocusOptions(),
-                    onSelected = { supportFocus = it },
-                )
-                SoftDropdown(
-                    label = "Style",
-                    selected = notificationStyle,
-                    options = listOf("Calculated from character preferences", "Soft and supportive", "Direct and clear", "Motivational", "Playful", "Protective"),
-                    onSelected = { notificationStyle = it },
-                )
-                SoftDropdown(
-                    label = "Urgency",
-                    selected = urgencyMode,
-                    options = listOf("Calculated from character preferences", "Soft only", "Normal", "High urgency"),
-                    onSelected = { urgencyMode = it },
-                )
-                Text("LunaKai keeps the deeper companion-experience calculation in the background, blending style, urgency, character mode, support focus, personality traits, and communication style.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Companion notifications", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                ToggleRow("Allow companion notifications", companionNotifications) { companionNotifications = it }
+                ToggleRow("Wellness check-ins", wellnessNotifications) { wellnessNotifications = it }
+                ToggleRow("Allow companion call invitations", allowCompanionCalls) { allowCompanionCalls = it }
+                ToggleRow("Roleplay notifications", roleplayNotifications) { roleplayNotifications = it }
+                ToggleRow("Roleplay-flavored wording", roleplayFlavor) { roleplayFlavor = it }
+                ToggleRow("Adult lock-screen previews", adultPreview) { adultPreview = it }
+                Text("Default notification text stays discreet. Adult previews are off unless you explicitly enable them.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text(permissionStatus, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
-                ToggleRow("Daily gentle prompt", dailyPrompt) { dailyPrompt = it }
-                ToggleRow("Mood check-ins", checkIns) { checkIns = it }
-                ToggleRow("Journal reminders", journalReminders) { journalReminders = it }
-                ToggleRow("Supportive safety nudges", crisisNudges) { crisisNudges = it }
-                ToggleRow("Quiet hours", quietHours) { quietHours = it }
+                Text("Delivery", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                SoftDropdown(
+                    label = "Frequency",
+                    selected = frequency,
+                    options = listOf("Every 3 hours", "Twice daily", "Daily", "Weekly"),
+                    onSelected = { frequency = it },
+                )
+                ToggleRow("Quiet hours", quietHoursEnabled) { quietHoursEnabled = it }
+                SoftDropdown(
+                    label = "Quiet hours",
+                    selected = quietHours,
+                    options = listOf("10:00 PM - 8:00 AM", "9:00 PM - 7:00 AM", "11:00 PM - 9:00 AM"),
+                    onSelected = { quietHours = it },
+                )
+                SoftDropdown(
+                    label = "Notification type",
+                    selected = notificationType,
+                    options = listOf(
+                        "Wellness check-in",
+                        "Companion attention message",
+                        "Miss-you/check-on-you message",
+                        "Live Companion call invitation",
+                        "Roleplay-mode message",
+                        "Acting/monologue practice reminder",
+                    ),
+                    onSelected = { notificationType = it },
+                )
+                MiniStateCard("Preview", if (adultPreview && roleplayNotifications) "User-enabled roleplay preview" else "Discreet preview")
+                MiniStateCard("Tap action", if (notificationType == "Live Companion call invitation") "Opens Live Companion" else "Opens LunaKai")
+                SecondarySoftButton("Schedule test companion call", onClick = {
+                    companionNotifications = true
+                    allowCompanionCalls = true
+                    notificationType = "Live Companion call invitation"
+                    CompanionNotificationScheduler.scheduleIncomingCall(context, delayMillis = 20_000L)
+                    permissionStatus = "A local companion-call notification was scheduled."
+                })
+            }
+            GlassCard {
+                Text("Safety", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Roleplay notifications are opt-in, consent-aware, discreet by default, and follow the same boundaries as chat: no minors, no coercion, no blackmail, and no real-person sexual likeness or voice impersonation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                MiniStateCard("Active companion", companion.name)
+                MiniStateCard("Roleplay mode", if (companion.isAdultRoleplayEnabled()) "Enabled for consenting adult fictional roleplay" else "Off")
             }
         }
     }
@@ -6678,44 +6418,16 @@ private fun GlobalProviderSetupDialog(
     onModelChange: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var openRouterKey by remember { mutableStateOf(context.prefString("openrouter_api_key", "")) }
-    var deepSeekKey by remember { mutableStateOf(context.prefString("deepseek_api_key", "")) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = CardDark,
-        title = { Text("AI Provider Options", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        title = { Text("Local AI Provider", color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SoftDropdown(
-                    label = "Provider",
-                    selected = providerName,
-                    options = providerOptions,
-                    onSelected = onProviderChange,
-                )
-                when (providerName) {
-                    "LunaKai Adult" -> {
-                        MiniStateCard("Home server", "Uses local Ollama model lunakai-ai-adult when your phone can reach your computer.")
-                        SolidInputField(endpoint.ifBlank { LUNAKAI_LOCAL_ENDPOINT }, onEndpointChange, "Endpoint", placeholder = LUNAKAI_LOCAL_ENDPOINT)
-                        SolidInputField(model.ifBlank { LUNAKAI_LOCAL_MODEL }, onModelChange, "Model", placeholder = LUNAKAI_LOCAL_MODEL)
-                    }
-                    "Gemini" -> {
-                        MiniStateCard("Gemini", "Uses the Firebase/Gemini integration already inside the app.")
-                        SolidInputField(model.ifBlank { "gemini-2.5-flash" }, onModelChange, "Model", placeholder = "gemini-2.5-flash")
-                    }
-                    "OpenRouter" -> {
-                        SolidInputField(openRouterKey, { key -> openRouterKey = key; context.savePref("openrouter_api_key", key) }, "OpenRouter API key", placeholder = "sk-or-v1-...", visualTransformation = PasswordVisualTransformation())
-                        SolidInputField(model, onModelChange, "Model", placeholder = AdultRoleplayRepository.DEFAULT_ADULT_MODEL)
-                    }
-                    "DeepSeek" -> {
-                        SolidInputField(deepSeekKey, { key -> deepSeekKey = key; context.savePref("deepseek_api_key", key) }, "DeepSeek API key", placeholder = "sk-...", visualTransformation = PasswordVisualTransformation())
-                        SolidInputField(model, onModelChange, "Model", placeholder = AdultRoleplayRepository.DEFAULT_DEEPSEEK_MODEL)
-                    }
-                    else -> {
-                        SolidInputField(endpoint, onEndpointChange, "Custom endpoint", placeholder = "https://")
-                        SolidInputField(model, onModelChange, "Model", placeholder = "model-name")
-                    }
-                }
+                MiniStateCard("Provider", "LunaKai Adult local")
+                MiniStateCard("Endpoint", LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT)
+                MiniStateCard("Model", LunaKaiLocalConfig.OLLAMA_MODEL)
+                Text("LunaKai now uses the local Ollama companion brain only. Provider names stay centralized in LunaKaiLocalConfig so the server can be changed in one place.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done", color = DeepRose) } },
@@ -6732,7 +6444,7 @@ private fun AdminSettingsScreen() {
     var providersRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
     val savedProviders = parseProviderOptions(providersRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
     val providerChoicesToAdd = DEFAULT_ADMIN_PROVIDER_OPTIONS.filterNot { it in savedProviders }.ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS.filter { it != "LunaKai Adult" } }
-    var providerToAdd by remember(providerChoicesToAdd) { mutableStateOf(providerChoicesToAdd.firstOrNull() ?: "OpenRouter") }
+    var providerToAdd by remember(providerChoicesToAdd) { mutableStateOf(providerChoicesToAdd.firstOrNull() ?: "LunaKai Adult") }
     var adminActiveProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
     if (adminActiveProvider !in savedProviders) {
         adminActiveProvider = "LunaKai Adult"
@@ -6770,7 +6482,7 @@ private fun AdminSettingsScreen() {
                 GlassCard {
                     Text("Provider Control", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        "Admin provider selections supersede the user provider menu. LunaKai Adult is protected as the local default; other providers can be added or removed.",
+                        "Admin provider selections supersede the user provider menu. LunaKai Adult local is the protected app-wide default.",
                         color = TextMuted,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
@@ -7151,6 +6863,15 @@ private fun GlassCard(
 }
 
 @Composable
+private fun hapticAction(onClick: () -> Unit): () -> Unit {
+    val haptic = LocalHapticFeedback.current
+    return {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        onClick()
+    }
+}
+
+@Composable
 private fun PrimaryGradientButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val appearance = LocalAppAppearance.current
     Box(
@@ -7160,7 +6881,7 @@ private fun PrimaryGradientButton(text: String, modifier: Modifier = Modifier, o
             .shadow(8.dp, PillShape)
             .clip(PillShape)
             .background(Brush.horizontalGradient(listOf(appearance.accentStart, appearance.accentMiddle, appearance.accentEnd)))
-            .clickable(onClick = onClick),
+            .clickable(onClick = hapticAction(onClick)),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -7171,7 +6892,7 @@ private fun PrimaryGradientButton(text: String, modifier: Modifier = Modifier, o
 private fun SecondarySoftButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val appearance = LocalAppAppearance.current
     Button(
-        onClick = onClick,
+        onClick = hapticAction(onClick),
         modifier = modifier
             .fillMaxWidth()
             .height(54.dp),
@@ -7195,7 +6916,7 @@ private fun MoodChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clip(LargeShape)
             .background(background)
             .border(1.dp, Color.White.copy(alpha = 0.62f), LargeShape)
-            .clickable(onClick = onClick)
+            .clickable(onClick = hapticAction(onClick))
             .padding(horizontal = 18.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -7762,7 +7483,7 @@ private fun SmallCircleButton(label: String, onClick: () -> Unit) {
             .clip(CircleShape)
             .background(CardAccent.copy(alpha = 0.92f))
             .border(1.dp, Color.White.copy(alpha = 0.16f), CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(onClick = hapticAction(onClick)),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

@@ -17,7 +17,6 @@ import java.util.UUID
 class ChatViewModel(
     private val authProvider: () -> FirebaseAuth = { FirebaseAuth.getInstance() },
     private val firestoreProvider: () -> FirebaseFirestore = { FirebaseFirestore.getInstance() },
-    private val geminiRepository: GeminiCompanionRepository = GeminiCompanionRepository(),
     private val adultRoleplayRepository: AdultRoleplayRepository = AdultRoleplayRepository(),
     private val ollamaRepository: OllamaCompanionRepository = OllamaCompanionRepository(),
 ) : ViewModel() {
@@ -27,8 +26,8 @@ class ChatViewModel(
     private val _isTyping = MutableStateFlow(false)
     val isTyping: StateFlow<Boolean> = _isTyping
 
-    private val _geminiState = MutableStateFlow<GeminiCompanionState?>(null)
-    val geminiState: StateFlow<GeminiCompanionState?> = _geminiState
+    private val _companionBrainState = MutableStateFlow<CompanionBrainState?>(null)
+    val companionBrainState: StateFlow<CompanionBrainState?> = _companionBrainState
 
     private val _chatStatus = MutableStateFlow<String?>(null)
     val chatStatus: StateFlow<String?> = _chatStatus
@@ -162,9 +161,9 @@ class ChatViewModel(
 
     fun sendMessage(
         companion: CompanionProfile,
-        geminiContext: GeminiCompanionContext,
+        companionContext: CompanionContext,
         userText: String,
-        history: List<GeminiChatTurn>,
+        history: List<CompanionChatTurn>,
         mode: String = ChatMessage.MODE_TEXT,
     ) {
         val trimmed = userText.trim()
@@ -175,36 +174,31 @@ class ChatViewModel(
 
         appendOptimistic(userMessage)
         _isTyping.value = true
-        _geminiState.value = GeminiCompanionState.Loading
+        _companionBrainState.value = CompanionBrainState.Loading
         _chatStatus.value = null
 
         viewModelScope.launch {
             launch { saveMessage(userMessage, companion.name) }
 
-            val result = when {
-                isLocalLunaKaiAi(geminiContext.adultProviderEndpoint) -> {
-                    ollamaRepository.sendMessage(geminiContext, trimmed, history)
-                }
-
-                geminiContext.adultProviderEndpoint.equals("gemini", ignoreCase = true) -> {
-                    geminiRepository.sendMessage(geminiContext, trimmed, history)
-                }
-
-                geminiContext.bdsmEnabled &&
-                    geminiContext.bdsmAdultConsentConfirmed &&
-                    geminiContext.adultProviderEnabled -> {
-                    adultRoleplayRepository.sendMessage(geminiContext, trimmed, history)
-                }
-
-                else -> {
-                    ollamaRepository.sendMessage(geminiContext, trimmed, history)
-                }
+            val localContext = companionContext.copy(
+                adultProviderEndpoint = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
+                adultProviderModel = LunaKaiLocalConfig.OLLAMA_MODEL,
+                adultProviderEnabled = true,
+            )
+            val result = if (
+                localContext.bdsmEnabled &&
+                localContext.bdsmAdultConsentConfirmed &&
+                localContext.adultProviderEnabled
+            ) {
+                adultRoleplayRepository.sendMessage(localContext, trimmed, history)
+            } else {
+                ollamaRepository.sendMessage(localContext, trimmed, history)
             }
 
             when (result) {
-                GeminiCompanionState.Loading -> Unit
+                CompanionBrainState.Loading -> Unit
 
-                is GeminiCompanionState.Success -> {
+                is CompanionBrainState.Success -> {
                     val reply = newMessage(
                         chatId = chatId,
                         companionId = companion.id,
@@ -213,11 +207,11 @@ class ChatViewModel(
                         mode = mode,
                     )
                     appendOptimistic(reply)
-                    _geminiState.value = result
+                    _companionBrainState.value = result
                     launch { saveMessage(reply, companion.name) }
                 }
 
-                is GeminiCompanionState.Error -> {
+                is CompanionBrainState.Error -> {
                     val reply = newMessage(
                         chatId = chatId,
                         companionId = companion.id,
@@ -226,7 +220,7 @@ class ChatViewModel(
                         mode = mode,
                     )
                     appendOptimistic(reply)
-                    _geminiState.value = result
+                    _companionBrainState.value = result
                     launch { saveMessage(reply, companion.name) }
                 }
             }
@@ -251,7 +245,7 @@ class ChatViewModel(
         appendOptimistic(userMessage)
         appendOptimistic(reply)
 
-        _geminiState.value = GeminiCompanionState.Success(companionText)
+        _companionBrainState.value = CompanionBrainState.Success(companionText)
         _chatStatus.value = null
 
         viewModelScope.launch {
@@ -260,6 +254,24 @@ class ChatViewModel(
         }
     }
 
+    fun addCompanionTranscript(
+        companion: CompanionProfile,
+        companionText: String,
+        mode: String = ChatMessage.MODE_CALL,
+    ) {
+        val trimmed = companionText.trim()
+        if (trimmed.isBlank()) return
+
+        val chatId = stableChatIdForCompanion(companion.id)
+        val reply = newMessage(chatId, companion.id, ChatMessage.SENDER_COMPANION, trimmed, mode)
+        appendOptimistic(reply)
+        _companionBrainState.value = CompanionBrainState.Success(trimmed)
+        _chatStatus.value = null
+
+        viewModelScope.launch {
+            saveMessage(reply, companion.name)
+        }
+    }
     private suspend fun saveMessage(message: ChatMessage, companionName: String) {
         val uid = authProvider().currentUser?.uid
         if (uid == null) {

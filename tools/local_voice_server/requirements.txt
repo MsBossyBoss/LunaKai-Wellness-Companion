@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+numpy==1.26.4
+soundfile
+kokoro==0.7.16
+requests

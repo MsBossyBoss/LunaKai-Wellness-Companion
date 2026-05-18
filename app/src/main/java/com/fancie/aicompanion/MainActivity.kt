@@ -2938,16 +2938,18 @@ private fun LiveCompanionCallScreen(
         cameraEnabled = false
         liveSessionState = LocalLiveSessionState.Connecting
         scope.launch {
-            val result = liveRepository.startAudioConversation(companionContext, modeLabel, answerPhrase)
+            answerPhrase?.takeIf { it.isNotBlank() }?.let { chatViewModel.addCompanionTranscript(companion, it, ChatMessage.MODE_CALL) }
+            val result = liveRepository.startAudioConversation(context, companionContext, modeLabel, answerPhrase)
             liveSessionState = result
             state = when (result) {
                 LocalLiveSessionState.Idle,
                 LocalLiveSessionState.Connecting -> state
                 is LocalLiveSessionState.Connected -> state.copy(
-                    callStatus = "Voice connected",
+                    callStatus = if (result.voiceSetupMessage == null) "Voice connected" else "Voice setup needs attention",
                     isMicOn = true,
                     isUserSpeaking = true,
-                    currentCaption = answerCaption ?: "${companion.name} can hear you now. Speak when you're ready.",
+                    isCompanionSpeaking = false,
+                    currentCaption = result.voiceSetupMessage ?: answerCaption ?: "${companion.name} can hear you now. Tap Mic when you're ready to speak.",
                 )
                 is LocalLiveSessionState.Error -> state.copy(
                     callStatus = "Voice setup needs attention",
@@ -3039,6 +3041,59 @@ private fun LiveCompanionCallScreen(
         }
     }
 
+    fun captureLiveSpeechTurn() {
+        if (liveSessionState !is LocalLiveSessionState.Connected) {
+            requestOrStartLocalLive(LiveMode.VOICE)
+            return
+        }
+        state = state.copy(
+            callStatus = "Listening...",
+            isMicOn = true,
+            isUserSpeaking = true,
+            isCompanionSpeaking = false,
+            currentCaption = "Listening for your voice. Pause when you're done so LunaKai can answer.",
+        )
+        scope.launch {
+            state = state.copy(
+                callStatus = "Processing speech...",
+                isMicOn = true,
+                isUserSpeaking = false,
+                isCompanionSpeaking = true,
+                currentCaption = "Transcribing your voice locally with faster-whisper...",
+            )
+            val history = chatMessages
+                .filter { it.sender != ChatMessage.SENDER_SYSTEM }
+                .takeLast(4)
+                .map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+            val result = liveRepository.captureUserSpeechTurn(context, companionContext, history)
+            if (result.transcript.isNotBlank() && result.reply.isNotBlank()) {
+                chatViewModel.sendPreparedReply(companion, result.transcript, result.reply, ChatMessage.MODE_CALL)
+            }
+            state = when {
+                result.errorMessage != null -> state.copy(
+                    callStatus = "Voice turn needs attention",
+                    isMicOn = true,
+                    isUserSpeaking = false,
+                    isCompanionSpeaking = false,
+                    currentCaption = result.errorMessage,
+                )
+                result.voiceErrorMessage != null -> state.copy(
+                    callStatus = "Voice setup needs attention",
+                    isMicOn = true,
+                    isUserSpeaking = true,
+                    isCompanionSpeaking = false,
+                    currentCaption = result.voiceErrorMessage,
+                )
+                else -> state.copy(
+                    callStatus = "Listening...",
+                    isMicOn = true,
+                    isUserSpeaking = true,
+                    isCompanionSpeaking = false,
+                    currentCaption = "${companion.name}: ${result.reply}",
+                )
+            }
+        }
+    }
     fun ringCompanionThenStartCall() {
         if (state.isMicOn || liveSessionState is LocalLiveSessionState.Connected || liveSessionState is LocalLiveSessionState.Connecting) {
             return
@@ -3094,8 +3149,12 @@ private fun LiveCompanionCallScreen(
         }
     }
 
-    LaunchedEffect(state.isMicOn, state.selectedMode) {
-        if (state.isMicOn && !state.currentCaption.startsWith("${companion.name}:")) {
+    LaunchedEffect(state.isMicOn, state.selectedMode, state.callStatus) {
+        if (
+            state.isMicOn &&
+            !state.callStatus.contains("attention", ignoreCase = true) &&
+            !state.currentCaption.startsWith("${companion.name}:")
+        ) {
             state = state.copy(
                 callStatus = "Listening...",
                 isUserSpeaking = true,
@@ -3169,7 +3228,12 @@ private fun LiveCompanionCallScreen(
                     }
                 }
 
-                Text("Tap Call to ring ${companion.name}. When they answer, speak naturally like a real call with a buddy, lover, or friend.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                val liveInstruction = if (state.callStatus == "Ready to connect") {
+                    "Tap Call to ring ${companion.name}. When they answer, speak naturally like a real call with a buddy, lover, or friend."
+                } else {
+                    state.currentCaption
+                }
+                Text(liveInstruction, color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
 
                 captureMessage?.let { message ->
                     GlassCard(background = SuccessGreen.copy(alpha = 0.24f)) {
@@ -3185,7 +3249,17 @@ private fun LiveCompanionCallScreen(
                             ringCompanionThenStartCall()
                         }
                         CallControlButton("Mic", R.drawable.ic_mic, state.isMicOn, RosePink.copy(alpha = 0.18f + micGlow * 0.42f)) {
-                            if (state.isMicOn) stopLocalLive() else requestOrStartLocalLive(LiveMode.VOICE)
+                            if (state.isCompanionSpeaking) {
+                                liveRepository.interruptCompanionSpeech()
+                                state = state.copy(
+                                    callStatus = "Interrupted",
+                                    isCompanionSpeaking = false,
+                                    isUserSpeaking = true,
+                                    currentCaption = "LunaKai stopped speaking. Tap Mic again when you're ready to talk.",
+                                )
+                            } else {
+                                captureLiveSpeechTurn()
+                            }
                         }
                         CallControlButton("Speaker", R.drawable.ic_speaker, state.isSpeakerOn, CalmBlue) {
                             state = state.copy(isSpeakerOn = !state.isSpeakerOn)
@@ -3382,6 +3456,8 @@ private fun SoftGlowDot(modifier: Modifier, color: Color, pulse: Float) {
 
 private fun callDisplayStatus(state: LiveCompanionCallUiState): String {
     return when {
+        state.callStatus.contains("attention", ignoreCase = true) -> state.callStatus
+        state.callStatus.contains("error", ignoreCase = true) -> state.callStatus
         state.isUserSpeaking -> "Listening..."
         state.isCompanionSpeaking -> "Speaking softly..."
         state.isMicOn -> "Listening..."
@@ -3397,10 +3473,12 @@ private fun LiveSessionStatusCard(
     val message = when (liveSessionState) {
         LocalLiveSessionState.Idle -> permissionMessage
         LocalLiveSessionState.Connecting -> "Connecting to live voice..."
-        is LocalLiveSessionState.Connected -> liveSessionState.message
+        is LocalLiveSessionState.Connected -> liveSessionState.voiceSetupMessage ?: liveSessionState.message
         is LocalLiveSessionState.Error -> liveSessionState.message
     } ?: return
-    val isError = liveSessionState is LocalLiveSessionState.Error || permissionMessage != null
+    val isError = liveSessionState is LocalLiveSessionState.Error ||
+        (liveSessionState as? LocalLiveSessionState.Connected)?.voiceSetupMessage != null ||
+        permissionMessage != null
     GlassCard(background = if (isError) WarningPeach.copy(alpha = 0.18f) else CardDark.copy(alpha = 0.94f)) {
         Text(
             if (isError) "Live setup" else "Live connected",
@@ -6124,6 +6202,7 @@ private fun VoiceLiveSettingsScreen(
         voicePreviewScope.launch {
             val previewLine = "Hey, I'm ${companion.name}."
             val result = voicePreviewRepository.startAudioConversation(
+                context = context,
                 companion = localPreviewContext(voiceName),
                 modeLabel = "voice settings preview",
                 answerPhrase = previewLine,
@@ -6133,7 +6212,7 @@ private fun VoiceLiveSettingsScreen(
                 LocalLiveSessionState.Connecting -> Unit
                 is LocalLiveSessionState.Connected -> {
                     delay(3600)
-                    voicePreviewStatus = "$voiceName preview finished."
+                    voicePreviewStatus = result.voiceSetupMessage ?: "$voiceName preview finished."
                 }
                 is LocalLiveSessionState.Error -> voicePreviewStatus = result.message
             }

@@ -27,6 +27,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
@@ -130,6 +131,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.time.LocalTime
 import java.util.Locale
 import org.json.JSONArray
@@ -251,6 +254,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         createFancieNotificationChannel()
+        migrateLocalAiEndpointPrefs()
         logLocalRuntimeConfig()
         runOllamaDiagnosticIfRequested(intent)
         setContent {
@@ -266,14 +270,24 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        migrateLocalAiEndpointPrefs()
         logLocalRuntimeConfig()
         runOllamaDiagnosticIfRequested(intent)
     }
 
+    private fun migrateLocalAiEndpointPrefs() {
+        val host = aiServerHost()
+        val endpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(host)
+        savePref("global_ai_provider", "LunaKai Adult")
+        savePref("global_ai_endpoint", endpoint)
+        savePref("global_ai_model", LunaKaiLocalConfig.OLLAMA_MODEL)
+        Log.i("LunaKaiModelRoute", "migratedLocalEndpointPrefs endpoint=$endpoint model=${LunaKaiLocalConfig.OLLAMA_MODEL} host=$host")
+    }
     private fun logLocalRuntimeConfig() {
+        val host = aiServerHost()
         Log.i(
             "LunaKaiLocalConfig",
-            "startup cleartext=true network=local host=${LunaKaiLocalConfig.OLLAMA_HOST} base=${LunaKaiLocalConfig.OLLAMA_BASE_URL} generate=${LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT} model=${LunaKaiLocalConfig.OLLAMA_MODEL} tags=${LunaKaiLocalConfig.OLLAMA_TAGS_ENDPOINT} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
+            "startup cleartext=true network=local host=$host base=${LunaKaiLocalConfig.ollamaBaseUrl(host)} generate=${LunaKaiLocalConfig.ollamaGenerateEndpoint(host)} model=${LunaKaiLocalConfig.OLLAMA_MODEL} tags=${LunaKaiLocalConfig.ollamaTagsEndpoint(host)} kokoro=${LunaKaiLocalConfig.localKokoroHealthUrl(host)} stt=${LunaKaiLocalConfig.localSttHealthUrl(host)} zonos=${LunaKaiLocalConfig.localZonosHealthUrl(host)} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
         )
     }
 
@@ -566,6 +580,31 @@ fun Context.prefInt(key: String, default: Int = 0) = lunakaiPrefs().getInt(key, 
 fun Context.savePref(key: String, value: String) = lunakaiPrefs().edit().putString(key, value).apply()
 fun Context.savePref(key: String, value: Boolean) = lunakaiPrefs().edit().putBoolean(key, value).apply()
 
+private const val KEY_AI_SERVER_HOST = "settings_ai_server_host"
+private const val KEY_LOCAL_VOICE_PROVIDER = "settings_local_voice_provider"
+private val LOCAL_VOICE_PROVIDER_OPTIONS = listOf("Zonos", "Kokoro", "XTTS", "OpenVoice")
+
+fun Context.aiServerHost(): String = LunaKaiLocalConfig.normalizeHost(
+    prefString(KEY_AI_SERVER_HOST, LunaKaiLocalConfig.DEFAULT_SERVER_HOST),
+)
+
+fun Context.localVoiceProviderPreference(): String = prefString(KEY_LOCAL_VOICE_PROVIDER, LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER)
+    .ifBlank { LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER }
+
+fun Context.localVoiceProviderLabel(): String = when (localVoiceProviderPreference().lowercase(Locale.US)) {
+    "zonos" -> "Zonos"
+    "xtts" -> "XTTS"
+    "openvoice", "open voice" -> "OpenVoice"
+    else -> "Kokoro"
+}
+
+fun Context.ollamaGenerateEndpoint(): String = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost())
+fun Context.ollamaBaseUrl(): String = LunaKaiLocalConfig.ollamaBaseUrl(aiServerHost())
+fun Context.ollamaTagsEndpoint(): String = LunaKaiLocalConfig.ollamaTagsEndpoint(aiServerHost())
+fun Context.localKokoroHealthUrl(): String = LunaKaiLocalConfig.localKokoroHealthUrl(aiServerHost())
+fun Context.localSttHealthUrl(): String = LunaKaiLocalConfig.localSttHealthUrl(aiServerHost())
+fun Context.localZonosHealthUrl(): String = LunaKaiLocalConfig.localZonosHealthUrl(aiServerHost())
+
 private fun Context.adminEmoIntelPrompt(): String {
     val traitNames = listOf(
         "Affectionate", "Playful", "Direct", "Romantic", "Dominant", "Submissive",
@@ -839,6 +878,28 @@ private fun saveCompanions(context: Context, companions: List<CompanionProfile>)
     context.savePref(KEY_COMPANIONS, JSONArray(normalized.map { it.toJson() }).toString())
 }
 
+private data class StoredCompanionImage(val photoUri: String, val storagePath: String)
+
+private fun Context.copyCompanionImageToAppStorage(companionId: String, sourceUri: Uri): StoredCompanionImage? {
+    val mimeType = contentResolver.getType(sourceUri).orEmpty().lowercase(Locale.US)
+    val extension = when {
+        "png" in mimeType -> "png"
+        "webp" in mimeType -> "webp"
+        "jpeg" in mimeType || "jpg" in mimeType -> "jpg"
+        else -> sourceUri.lastPathSegment?.substringAfterLast('.', "jpg")?.lowercase(Locale.US)?.takeIf { it in setOf("jpg", "jpeg", "png", "webp") } ?: "jpg"
+    }
+    val directory = File(filesDir, "companion_images").apply { mkdirs() }
+    val safeId = companionId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val destination = File(directory, "${safeId}_active.$extension")
+    return runCatching {
+        contentResolver.openInputStream(sourceUri)?.use { input ->
+            FileOutputStream(destination, false).use { output -> input.copyTo(output) }
+        } ?: throw IllegalStateException("Could not open selected image.")
+        StoredCompanionImage(Uri.fromFile(destination).toString(), destination.absolutePath)
+    }.onFailure { error ->
+        Log.w("LunaKaiCompanionImage", "Could not copy companion image", error)
+    }.getOrNull()
+}
 private fun CompanionProfile.toJson(): JSONObject = JSONObject()
     .put("id", id)
     .put("name", if (id == "luna") "Luna" else if (id == "kai") "Kai" else name)
@@ -2697,24 +2758,16 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     }
     val context = LocalContext.current
     val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
-    val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
+    val globalAiEndpoint = context.ollamaGenerateEndpoint()
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
     val adminEmoIntelProfile = context.adminEmoIntelPrompt()
     val adultProviderActive = companion.isAdultRoleplayEnabled() &&
         companion.bdsmIdentitySettings.adultConsentConfirmed &&
         companion.bdsmIdentitySettings.adultProviderEnabled
     val effectiveProviderEnabled = true
-    val effectiveEndpoint = if (adultProviderActive) {
-        companion.bdsmIdentitySettings.adultProviderEndpoint.ifBlank { globalAiEndpoint }
-    } else {
-        globalAiEndpoint
-    }
-    val effectiveModel = when {
-        providerNameFromEndpoint(effectiveEndpoint) == "LunaKai Adult" -> LUNAKAI_ADULT_MODEL
-        adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
-        else -> globalAiModel
-    }
-    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
+    val effectiveEndpoint = context.ollamaGenerateEndpoint()
+    val effectiveModel = LUNAKAI_LOCAL_MODEL
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), context.localVoiceProviderPreference()) {
         CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2736,6 +2789,8 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             adultProviderEndpoint = effectiveEndpoint,
             adultProviderModel = effectiveModel,
             adminEmoIntelProfile = adminEmoIntelProfile,
+            serverHost = context.aiServerHost(),
+            localVoiceProviderId = context.localVoiceProviderPreference(),
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2743,8 +2798,10 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
     val isTyping by chatViewModel.isTyping.collectAsState()
     val companionBrainState by chatViewModel.companionBrainState.collectAsState()
     val chatStatus by chatViewModel.chatStatus.collectAsState()
-    val displayMessages = messages.ifEmpty {
-        listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = stableChatIdForCompanion(companion.id), companionId = companion.id, text = FRESH_CHAT_GREETING))
+    val currentChatId = stableChatIdForCompanion(companion.id)
+    val visibleMessages = messages.filter { it.chatId == currentChatId && it.companionId == companion.id && it.sender != ChatMessage.SENDER_SYSTEM }
+    val displayMessages = visibleMessages.ifEmpty {
+        listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = currentChatId, companionId = companion.id, text = FRESH_CHAT_GREETING))
     }
     var input by rememberSaveable(companion.id, chatStorage.label) { mutableStateOf("") }
     val chatScrollState = rememberScrollState()
@@ -2799,7 +2856,7 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                     SmallCircleButton("send") {
                         if (input.isNotBlank() && !isTyping) {
                             val userText = input.trim()
-                            val history = messages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+                            val history = visibleMessages.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
                             val bdsmSetupResponse = nextBdsmSetupResponse(companion, bdsmSessionState, userText)
                             input = ""
                             if (bdsmSetupResponse != null) {
@@ -2842,11 +2899,13 @@ private fun LiveCompanionCallScreen(
     val chatViewModel: ChatViewModel = viewModel(key = "live_chat_${companion.id}")
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
     val chatMessages by chatViewModel.messages.collectAsState()
+    val liveCurrentChatId = stableChatIdForCompanion(companion.id)
+    val visibleLiveMessages = chatMessages.filter { it.chatId == liveCurrentChatId && it.companionId == companion.id && it.sender != ChatMessage.SENDER_SYSTEM }
     val liveChatStatus by chatViewModel.chatStatus.collectAsState()
     val liveIsTyping by chatViewModel.isTyping.collectAsState()
     var textInput by rememberSaveable(companion.id, "live") { mutableStateOf("") }
     val liveChatScrollState = rememberScrollState()
-    LaunchedEffect(showTextChat, chatMessages.size, chatMessages.lastOrNull()?.id, liveIsTyping) {
+    LaunchedEffect(showTextChat, visibleLiveMessages.size, visibleLiveMessages.lastOrNull()?.id, liveIsTyping) {
         if (showTextChat) {
             delay(80)
             liveChatScrollState.animateScrollTo(liveChatScrollState.maxValue)
@@ -2875,24 +2934,16 @@ private fun LiveCompanionCallScreen(
     val callRingtoneUri = context.prefString(voiceSettingKey(companion.id, "ringtoneUri"), "")
     val callUrgency = context.prefString(voiceSettingKey(companion.id, "answerUrgency"), CALL_URGENCY_OPTIONS.first())
     val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
-    val globalAiEndpoint = context.prefString("global_ai_endpoint", endpointForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_ENDPOINT }
+    val globalAiEndpoint = context.ollamaGenerateEndpoint()
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
     val adminEmoIntelProfile = context.adminEmoIntelPrompt()
     val adultProviderActive = companion.isAdultRoleplayEnabled() &&
         companion.bdsmIdentitySettings.adultConsentConfirmed &&
         companion.bdsmIdentitySettings.adultProviderEnabled
     val effectiveProviderEnabled = true
-    val effectiveEndpoint = if (adultProviderActive) {
-        companion.bdsmIdentitySettings.adultProviderEndpoint.ifBlank { globalAiEndpoint }
-    } else {
-        globalAiEndpoint
-    }
-    val effectiveModel = when {
-        providerNameFromEndpoint(effectiveEndpoint) == "LunaKai Adult" -> LUNAKAI_ADULT_MODEL
-        adultProviderActive -> companion.bdsmIdentitySettings.adultProviderModel.ifBlank { globalAiModel }
-        else -> globalAiModel
-    }
-    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile) {
+    val effectiveEndpoint = context.ollamaGenerateEndpoint()
+    val effectiveModel = LUNAKAI_LOCAL_MODEL
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), context.localVoiceProviderPreference()) {
         CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2914,13 +2965,26 @@ private fun LiveCompanionCallScreen(
             adultProviderEndpoint = effectiveEndpoint,
             adultProviderModel = effectiveModel,
             adminEmoIntelProfile = adminEmoIntelProfile,
+            serverHost = context.aiServerHost(),
+            localVoiceProviderId = context.localVoiceProviderPreference(),
         )
     }
     var liveSessionState by remember { mutableStateOf<LocalLiveSessionState>(LocalLiveSessionState.Idle) }
+    var speechTurnInProgress by remember { mutableStateOf(false) }
     var cameraEnabled by remember { mutableStateOf(false) }
     var pendingLiveMode by remember { mutableStateOf<LiveMode?>(null) }
     var pendingAnswerPhrase by remember { mutableStateOf<String?>(null) }
     var permissionMessage by remember { mutableStateOf<String?>(null) }
+    fun applyLivePhase(phase: LiveCallPhase, message: String) {
+        state = when (phase) {
+            LiveCallPhase.Listening -> state.copy(callStatus = "Listening...", isMicOn = true, isUserSpeaking = true, isCompanionSpeaking = false, currentCaption = "Listening... Tap Mic again to interrupt or speak after the current turn.")
+            LiveCallPhase.ProcessingSpeech -> state.copy(callStatus = "Processing speech...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = "Transcribing your voice locally with faster-whisper...")
+            LiveCallPhase.GeneratingReply -> state.copy(callStatus = "Thinking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = "LunaKai is thinking through your turn...")
+            LiveCallPhase.GeneratingVoice -> state.copy(callStatus = message, isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = message)
+            LiveCallPhase.Speaking -> state.copy(callStatus = "Speaking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = true, currentCaption = state.currentCaption)
+            else -> state.copy(callStatus = message, currentCaption = message)
+        }
+    }
     fun startLocalLive(mode: LiveMode, answerPhrase: String? = null) {
         val modeLabel = when (mode) {
             LiveMode.VOICE -> "voice call"
@@ -2931,15 +2995,15 @@ private fun LiveCompanionCallScreen(
             selectedMode = mode,
             isMicOn = true,
             isUserSpeaking = true,
-            isCompanionSpeaking = answerCaption != null,
-            callStatus = "Connecting to live voice...",
-            currentCaption = answerCaption ?: "Connecting voice. When it is ready, speak naturally to ${companion.name}.",
+            isCompanionSpeaking = false,
+            callStatus = "Warming up LunaKai voice...",
+            currentCaption = answerCaption ?: "Warming up LunaKai voice. When it is ready, tap Mic and speak naturally to ${companion.name}.",
         )
         cameraEnabled = false
         liveSessionState = LocalLiveSessionState.Connecting
         scope.launch {
             answerPhrase?.takeIf { it.isNotBlank() }?.let { chatViewModel.addCompanionTranscript(companion, it, ChatMessage.MODE_CALL) }
-            val result = liveRepository.startAudioConversation(context, companionContext, modeLabel, answerPhrase)
+            val result = liveRepository.startAudioConversation(context, companionContext, modeLabel, answerPhrase) { phase, message -> scope.launch { applyLivePhase(phase, message) } }
             liveSessionState = result
             state = when (result) {
                 LocalLiveSessionState.Idle,
@@ -3046,6 +3110,18 @@ private fun LiveCompanionCallScreen(
             requestOrStartLocalLive(LiveMode.VOICE)
             return
         }
+        if (speechTurnInProgress) {
+            Log.i("LunaKaiLocalSTT", "pushToTalkIgnored turnInProgress=true")
+            state = state.copy(
+                callStatus = "Processing speech...",
+                isMicOn = true,
+                isUserSpeaking = false,
+                isCompanionSpeaking = false,
+                currentCaption = "Already processing your voice turn. Wait for LunaKai to answer before tapping Mic again.",
+            )
+            return
+        }
+        speechTurnInProgress = true
         state = state.copy(
             callStatus = "Listening...",
             isMicOn = true,
@@ -3054,43 +3130,47 @@ private fun LiveCompanionCallScreen(
             currentCaption = "Listening for your voice. Pause when you're done so LunaKai can answer.",
         )
         scope.launch {
-            state = state.copy(
-                callStatus = "Processing speech...",
-                isMicOn = true,
-                isUserSpeaking = false,
-                isCompanionSpeaking = true,
-                currentCaption = "Transcribing your voice locally with faster-whisper...",
-            )
-            val history = chatMessages
-                .filter { it.sender != ChatMessage.SENDER_SYSTEM }
-                .takeLast(4)
-                .map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
-            val result = liveRepository.captureUserSpeechTurn(context, companionContext, history)
-            if (result.transcript.isNotBlank() && result.reply.isNotBlank()) {
-                chatViewModel.sendPreparedReply(companion, result.transcript, result.reply, ChatMessage.MODE_CALL)
-            }
-            state = when {
-                result.errorMessage != null -> state.copy(
-                    callStatus = "Voice turn needs attention",
+            try {
+                state = state.copy(
+                    callStatus = "Processing speech...",
                     isMicOn = true,
                     isUserSpeaking = false,
                     isCompanionSpeaking = false,
-                    currentCaption = result.errorMessage,
+                    currentCaption = "Transcribing your voice locally with faster-whisper...",
                 )
-                result.voiceErrorMessage != null -> state.copy(
-                    callStatus = "Voice setup needs attention",
-                    isMicOn = true,
-                    isUserSpeaking = true,
-                    isCompanionSpeaking = false,
-                    currentCaption = result.voiceErrorMessage,
-                )
-                else -> state.copy(
-                    callStatus = "Listening...",
-                    isMicOn = true,
-                    isUserSpeaking = true,
-                    isCompanionSpeaking = false,
-                    currentCaption = "${companion.name}: ${result.reply}",
-                )
+                val history = visibleLiveMessages
+                    .filter { it.sender != ChatMessage.SENDER_SYSTEM }
+                    .takeLast(4)
+                    .map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+                val result = liveRepository.captureUserSpeechTurn(context, companionContext, history) { phase, message -> scope.launch { applyLivePhase(phase, message) } }
+                if (result.transcript.isNotBlank() && result.reply.isNotBlank()) {
+                    chatViewModel.sendPreparedReply(companion, result.transcript, result.reply, ChatMessage.MODE_CALL)
+                }
+                state = when {
+                    result.errorMessage != null -> state.copy(
+                        callStatus = "Voice turn needs attention",
+                        isMicOn = true,
+                        isUserSpeaking = false,
+                        isCompanionSpeaking = false,
+                        currentCaption = result.errorMessage,
+                    )
+                    result.voiceErrorMessage != null -> state.copy(
+                        callStatus = "Voice setup needs attention",
+                        isMicOn = true,
+                        isUserSpeaking = true,
+                        isCompanionSpeaking = false,
+                        currentCaption = result.voiceErrorMessage,
+                    )
+                    else -> state.copy(
+                        callStatus = "Listening...",
+                        isMicOn = true,
+                        isUserSpeaking = true,
+                        isCompanionSpeaking = false,
+                        currentCaption = "${companion.name}: ${result.reply}",
+                    )
+                }
+            } finally {
+                speechTurnInProgress = false
             }
         }
     }
@@ -3132,6 +3212,7 @@ private fun LiveCompanionCallScreen(
         scope.launch {
             liveRepository.stopAudioConversation()
             liveSessionState = LocalLiveSessionState.Idle
+            speechTurnInProgress = false
             cameraEnabled = false
             state = state.copy(
                 isMicOn = false,
@@ -3336,7 +3417,7 @@ private fun LiveCompanionCallScreen(
                                 .verticalScroll(liveChatScrollState),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            chatMessages.ifEmpty { listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = stableChatIdForCompanion(companion.id), companionId = companion.id, text = FRESH_CHAT_GREETING)) }.forEach {
+                            visibleLiveMessages.ifEmpty { listOf(ChatMessage(sender = ChatMessage.SENDER_COMPANION, chatId = liveCurrentChatId, companionId = companion.id, text = FRESH_CHAT_GREETING)) }.forEach {
                                 ChatBubble(it, centeredWide = true)
                             }
                         }
@@ -3370,7 +3451,7 @@ private fun LiveCompanionCallScreen(
                                             LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
-                                        val history = chatMessages.filter { it.sender != ChatMessage.SENDER_SYSTEM }.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+                                        val history = visibleLiveMessages.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
                                         chatViewModel.sendMessage(companion, companionContext, userText, history, mode)
                                         state = state.copy(currentCaption = userText, isUserSpeaking = true, isCompanionSpeaking = false)
                                         textInput = ""
@@ -4097,7 +4178,7 @@ private fun CharacterModeCard(
                         .background(AccentPink.copy(alpha = 0.80f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("✓", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("âœ“", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -4233,7 +4314,7 @@ private fun SupportFocusContentSections(selectedFocus: Set<String>) {
                 }
                 if (expandedFocus == focus) {
                     content[focus].orEmpty().forEach { item ->
-                        Text("• $item", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                        Text("â€¢ $item", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
                     }
                 }
             }
@@ -5077,11 +5158,47 @@ private fun ActiveCompanionSettingsScreen(
     var openSection by remember { mutableStateOf<String?>("Basic Info") }
     var showRolePlaySetup by remember { mutableStateOf(false) }
     var traitLimitMessage by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    var imageMessage by remember { mutableStateOf<String?>(null) }
+    var localVoiceProvider by remember { mutableStateOf(context.localVoiceProviderLabel()) }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) {
+            imageMessage = "Image selection canceled."
+            return@rememberLauncherForActivityResult
+        }
+        val storedImage = context.copyCompanionImageToAppStorage(companion.id, uri)
+        if (storedImage == null) {
+            imageMessage = "Image could not be applied. Choose a jpg, png, or webp image."
+            return@rememberLauncherForActivityResult
+        }
+        onCompanionChange(companion.copy(
+            photoUri = storedImage.photoUri,
+            photoStoragePath = storedImage.storagePath,
+            avatarType = "Uploaded Photo",
+            imageResName = "",
+            imageResId = null,
+        ))
+        imageMessage = "Image applied to ${companion.name}."
+    }
     fun toggle(section: String) { openSection = if (openSection == section) null else section }
 
     GradientBackground {
         ScreenScroll {
             CompanionImageSquare(companion)
+            Text(companion.name, color = TextDark, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            GlassCard {
+                PrimaryGradientButton("Upload Image") {
+                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                if (companion.photoUri != null) {
+                    SecondarySoftButton("Reset to Default Image") {
+                        companion.photoStoragePath?.let { runCatching { File(it).delete() } }
+                        onCompanionChange(companion.copy(photoUri = null, photoStoragePath = null, avatarType = "Glowing Orb"))
+                        imageMessage = "Default companion image restored."
+                    }
+                }
+                imageMessage?.let { Text(it, color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp) }
+            }
 
             SettingsAccordionSection(
                 title = "Basic Info",
@@ -5105,7 +5222,16 @@ private fun ActiveCompanionSettingsScreen(
             ) {
                 SoftDropdown("Voice settings", companion.voice.ifBlank { allowedVoiceOptions.first() }, allowedVoiceOptions) { voice -> onCompanionChange(companion.copy(voice = voice)) }
                 MiniStateCard("Selected sound", voicePreviewDescription(companion.voice.ifBlank { allowedVoiceOptions.first() }))
-                Text("Use this dropdown to choose the companion voice. Each option has its own pitch, speed, and live voice mapping where the provider supports it.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                SoftDropdown(
+                    label = "Local voice provider",
+                    selected = localVoiceProvider,
+                    options = LOCAL_VOICE_PROVIDER_OPTIONS,
+                    onSelected = { provider ->
+                        localVoiceProvider = provider
+                        context.savePref(KEY_LOCAL_VOICE_PROVIDER, provider.lowercase(Locale.US))
+                    },
+                )
+                Text("Use this dropdown to choose the companion voice. Zonos is the expressive local target when available; Kokoro remains the stable fallback.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 CharacterModeGrid(characterModes, companion.characterMode) { mode -> onCompanionChange(companion.copy(characterMode = mode)) }
             }
 
@@ -5296,7 +5422,7 @@ private fun PreferencesScreen(
     var notificationStyle by remember { mutableStateOf(context.prefString("settings_notification_style", "Calculated from character preferences")) }
     var notificationUrgency by remember { mutableStateOf(context.prefString("settings_notification_urgency", "Calculated from character preferences")) }
     var globalAiProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
-    var globalAiEndpoint by remember { mutableStateOf(context.prefString("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)) }
+    var globalAiEndpoint by remember { mutableStateOf(context.ollamaGenerateEndpoint()) }
     var globalAiModel by remember { mutableStateOf(context.prefString("global_ai_model", LUNAKAI_LOCAL_MODEL)) }
     var adminProviderOptionsRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
     val allowedAiProviders = parseProviderOptions(adminProviderOptionsRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
@@ -5305,6 +5431,11 @@ private fun PreferencesScreen(
     var openSettingsSection by remember { mutableStateOf<String?>(null) }
     var showActiveRolePlaySetup by remember { mutableStateOf(false) }
     val settingsScope = rememberCoroutineScope()
+    var aiServerHost by remember { mutableStateOf(context.aiServerHost()) }
+    var serverPreset by remember { mutableStateOf("Home Wi-Fi") }
+    var localVoiceProvider by remember { mutableStateOf(context.localVoiceProviderLabel()) }
+    var serverConnectionSummary by remember { mutableStateOf("Not tested yet.") }
+    var serverConnectionRunning by remember { mutableStateOf(false) }
     var ollamaDiagnosticSummary by remember { mutableStateOf(context.prefString("ollama_diagnostic_summary", "Not run yet.")) }
     var ollamaDiagnosticRunning by remember { mutableStateOf(false) }
     val activeRoleplayOptions = listOf("Wellness Coach", "Athletic Partner", "Monologue Practice", "RolePlay")
@@ -5313,7 +5444,7 @@ private fun PreferencesScreen(
         if (allowedAiProviders.isNotEmpty() && globalAiProvider !in allowedAiProviders) {
             val fallbackProvider = allowedAiProviders.first()
             globalAiProvider = fallbackProvider
-            globalAiEndpoint = endpointForProvider(fallbackProvider, globalAiEndpoint)
+            globalAiEndpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost)
             globalAiModel = modelForProvider(fallbackProvider)
         }
     }
@@ -5383,7 +5514,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "AI Provider Settings",
-                subtitle = "Current provider: $globalAiProvider · $globalAiModel",
+                subtitle = "Current provider: $globalAiProvider Â· $globalAiModel",
                 expanded = openSettingsSection == "AI Provider Settings",
                 onToggle = { toggleSection("AI Provider Settings") },
             ) {
@@ -5394,14 +5525,63 @@ private fun PreferencesScreen(
                     options = allowedAiProviders,
                     onSelected = { provider ->
                         globalAiProvider = provider
-                        globalAiEndpoint = endpointForProvider(provider, globalAiEndpoint)
+                        globalAiEndpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost)
                         globalAiModel = modelForProvider(provider)
                         showProviderDialog = false
                     },
                 )
                 MiniStateCard("Endpoint", globalAiEndpoint)
                 MiniStateCard("Model", globalAiModel)
-                MiniStateCard("Timeouts", "connect 15s, read 120s, write 60s, call 150s")
+                MiniStateCard("Timeouts", "connect 10s, read 60s, write 30s, call 75s")
+                HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
+                Text("Server Settings", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                SoftDropdown(
+                    label = "Server preset",
+                    selected = serverPreset,
+                    options = listOf("Home Wi-Fi", "Away / Tailscale", "Custom host"),
+                    onSelected = { preset ->
+                        serverPreset = preset
+                        if (preset == "Home Wi-Fi") aiServerHost = LunaKaiLocalConfig.DEFAULT_SERVER_HOST
+                    },
+                )
+                RoundedInputField(aiServerHost, { aiServerHost = LunaKaiLocalConfig.normalizeHost(it) }, "AI Server Host")
+                MiniStateCard("Ollama", LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost))
+                MiniStateCard("Kokoro", LunaKaiLocalConfig.localKokoroHealthUrl(aiServerHost))
+                MiniStateCard("STT", LunaKaiLocalConfig.localSttHealthUrl(aiServerHost))
+                MiniStateCard("Zonos", LunaKaiLocalConfig.localZonosHealthUrl(aiServerHost))
+                SoftDropdown(
+                    label = "Local voice provider",
+                    selected = localVoiceProvider,
+                    options = LOCAL_VOICE_PROVIDER_OPTIONS,
+                    onSelected = { provider ->
+                        localVoiceProvider = provider
+                        context.savePref(KEY_LOCAL_VOICE_PROVIDER, provider.lowercase(Locale.US))
+                    },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SecondarySoftButton("Save Host", modifier = Modifier.weight(1f), onClick = {
+                        aiServerHost = LunaKaiLocalConfig.normalizeHost(aiServerHost)
+                        context.savePref(KEY_AI_SERVER_HOST, aiServerHost)
+                        globalAiEndpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost)
+                        context.savePref("global_ai_endpoint", globalAiEndpoint)
+                        serverConnectionSummary = "Saved host $aiServerHost."
+                    })
+                    SecondarySoftButton(if (serverConnectionRunning) "Testing" else "Test", modifier = Modifier.weight(1f), onClick = {
+                        if (!serverConnectionRunning) {
+                            serverConnectionRunning = true
+                            serverConnectionSummary = "Testing local services..."
+                            settingsScope.launch {
+                                val results = LunaKaiServerConnectionTester.run(aiServerHost)
+                                serverConnectionSummary = results.joinToString("\n") { step ->
+                                    val status = if (step.ok) "OK" else "FAILED"
+                                    "$status ${step.name} ${step.elapsedMs}ms - ${step.detail}"
+                                }
+                                serverConnectionRunning = false
+                            }
+                        }
+                    })
+                }
+                Text(serverConnectionSummary, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 SecondarySoftButton("Provider options", onClick = { showProviderDialog = true })
                 SecondarySoftButton(if (ollamaDiagnosticRunning) "Running Ollama diagnostic" else "Run Ollama diagnostic", onClick = {
                     if (!ollamaDiagnosticRunning) {
@@ -5426,7 +5606,7 @@ private fun PreferencesScreen(
                     model = globalAiModel,
                     onProviderChange = { provider ->
                         globalAiProvider = provider
-                        globalAiEndpoint = endpointForProvider(provider, globalAiEndpoint)
+                        globalAiEndpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost)
                         globalAiModel = modelForProvider(provider)
                     },
                     onEndpointChange = { globalAiEndpoint = it },
@@ -5564,7 +5744,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Wellness Settings",
-                subtitle = "$defaultWellnessTool · reminders $reminderFrequency",
+                subtitle = "$defaultWellnessTool Â· reminders $reminderFrequency",
                 expanded = openSettingsSection == "Wellness Settings",
                 onToggle = { toggleSection("Wellness Settings") },
             ) {
@@ -5627,7 +5807,7 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "Companion Notifications",
-                subtitle = "$notificationStyle · $notificationUrgency",
+                subtitle = "$notificationStyle Â· $notificationUrgency",
                 expanded = openSettingsSection == "Companion Notifications",
                 onToggle = { toggleSection("Companion Notifications") },
             ) {
@@ -6195,6 +6375,8 @@ private fun VoiceLiveSettingsScreen(
         anatomicalLanguageAllowed = companion.isAdultRoleplayEnabled() && companion.bdsmIdentitySettings.anatomicalLanguageAllowed,
         adultPhrasePreferences = companion.bdsmIdentitySettings.preferredAdultPhrases,
         adminEmoIntelProfile = context.adminEmoIntelPrompt(),
+        serverHost = context.aiServerHost(),
+        localVoiceProviderId = context.localVoiceProviderPreference(),
     )
 
     fun startLocalVoicePreview(voiceName: String) {
@@ -7824,3 +8006,5 @@ private fun MiniStateCard(title: String, value: String) {
         )
     }
 }
+
+

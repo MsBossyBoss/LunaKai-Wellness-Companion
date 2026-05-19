@@ -21,6 +21,8 @@ data class CompanionContext(
     val adultProviderEndpoint: String = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
     val adultProviderModel: String = LunaKaiLocalConfig.OLLAMA_MODEL,
     val adminEmoIntelProfile: String = "",
+    val serverHost: String = LunaKaiLocalConfig.DEFAULT_SERVER_HOST,
+    val localVoiceProviderId: String = LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER,
 )
 
 sealed interface CompanionBrainState {

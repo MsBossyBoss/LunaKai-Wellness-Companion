@@ -37,7 +37,7 @@ class AdultRoleplayRepository(
 
         val localCompanion = companion.copy(
             adultProviderEnabled = true,
-            adultProviderEndpoint = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
+            adultProviderEndpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(companion.serverHost),
             adultProviderModel = LunaKaiLocalConfig.OLLAMA_MODEL,
         )
         ollamaRepository.sendMessage(localCompanion, userMessage, history)

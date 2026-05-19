@@ -4,6 +4,7 @@ import importlib.util
 import io
 import logging
 import os
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -17,6 +18,8 @@ from pydantic import BaseModel, Field
 HOST = os.getenv("LUNAKAI_VOICE_HOST", "0.0.0.0")
 PORT = int(os.getenv("LUNAKAI_VOICE_PORT", "8000"))
 SAMPLE_RATE = int(os.getenv("LUNAKAI_KOKORO_SAMPLE_RATE", "24000"))
+PRELOAD_ON_STARTUP = os.getenv("LUNAKAI_KOKORO_PRELOAD", "true").lower() in {"1", "true", "yes", "on"}
+WARMUP_TEXT = os.getenv("LUNAKAI_KOKORO_WARMUP_TEXT", "LunaKai voice ready.")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("lunakai-local-voice")
@@ -69,6 +72,28 @@ def health() -> dict[str, Any]:
         "error": error,
     }
 
+
+@app.post("/warmup")
+def warmup() -> dict[str, Any]:
+    started_at = time.perf_counter()
+    ok, error = _kokoro_status()
+    if not ok:
+        raise HTTPException(status_code=503, detail=error)
+    try:
+        audio = synthesize_kokoro_wav(WARMUP_TEXT, AVAILABLE_VOICES["female_default"], 1.0)
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        log.info("kokoro warmup complete elapsed_ms=%s audio_bytes=%s", elapsed_ms, len(audio))
+        return {
+            "ok": True,
+            "engine": "kokoro",
+            "pipeline_loaded": kokoro_pipeline.cache_info().currsize > 0,
+            "elapsed_ms": elapsed_ms,
+            "audio_bytes": len(audio),
+            "sample_rate": SAMPLE_RATE,
+        }
+    except Exception as exc:
+        log.exception("kokoro warmup failed")
+        raise HTTPException(status_code=500, detail=f"Kokoro warmup failed: {type(exc).__name__}: {exc}") from exc
 
 @app.get("/voices")
 def voices() -> dict[str, Any]:
@@ -129,6 +154,23 @@ def speak_openvoice(_: SpeakRequest) -> dict[str, Any]:
         detail="OpenVoice is a local provider placeholder. Install and wire a local OpenVoice engine before selecting it.",
     )
 
+
+
+@app.on_event("startup")
+def startup_preload() -> None:
+    if not PRELOAD_ON_STARTUP:
+        return
+    started_at = time.perf_counter()
+    ok, error = _kokoro_status()
+    if not ok:
+        log.warning("kokoro preload skipped: %s", error)
+        return
+    try:
+        kokoro_pipeline()
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        log.info("kokoro pipeline preloaded elapsed_ms=%s pipeline_loaded=%s", elapsed_ms, kokoro_pipeline.cache_info().currsize > 0)
+    except Exception:
+        log.exception("kokoro preload failed")
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host=HOST, port=PORT, reload=False)

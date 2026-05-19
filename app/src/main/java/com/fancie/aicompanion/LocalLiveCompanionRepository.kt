@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -92,6 +93,7 @@ class LocalFasterWhisperProvider(
         if (audioBytes.isEmpty()) {
             return@withContext LocalSpeechToTextResult("", errorMessage = "No speech audio was captured. Try again after the local microphone pipeline is connected.")
         }
+        val startedAt = System.currentTimeMillis()
         runCatching {
             Log.i("LunaKaiLocalSTT", "transcribeStart url=$transcribeUrl audioBytes=${audioBytes.size} mimeType=$mimeType")
             val requestBody = MultipartBody.Builder()
@@ -108,7 +110,7 @@ class LocalFasterWhisperProvider(
                 val root = JSONObject(bodyText)
                 val transcript = root.optString("text").trim()
                 val durationMs = root.optLong("duration_ms", 0L)
-                Log.i("LunaKaiLocalSTT", "transcribeSuccess chars=${transcript.length} durationMs=$durationMs")
+                Log.i("LunaKaiLocalSTT", "transcribeSuccess responseMs=${System.currentTimeMillis() - startedAt} chars=${transcript.length} durationMs=$durationMs")
                 LocalSpeechToTextResult(
                     transcript = transcript,
                     partialTranscript = root.optString("partial").trim().takeIf { it.isNotBlank() && it != "false" },
@@ -116,7 +118,7 @@ class LocalFasterWhisperProvider(
                 )
             }
         }.getOrElse { error ->
-            Log.w("LunaKaiLocalSTT", "transcribeFailed url=$transcribeUrl exception=${error::class.java.simpleName} message=${error.message}", error)
+            Log.w("LunaKaiLocalSTT", "transcribeFailed responseMs=${System.currentTimeMillis() - startedAt} url=$transcribeUrl exception=${error::class.java.simpleName} message=${error.message}", error)
             LocalSpeechToTextResult(
                 transcript = "",
                 errorMessage = "Local faster-whisper is not reachable at $transcribeUrl. Start the local STT server before using live speech. Details: ${error.message}",
@@ -126,6 +128,7 @@ class LocalFasterWhisperProvider(
 }
 
 enum class LocalVoiceProviderId(val label: String) {
+    Zonos("Zonos"),
     Kokoro("Kokoro"),
     Xtts("XTTS"),
     OpenVoice("OpenVoice"),
@@ -169,6 +172,7 @@ abstract class LocalHttpVoiceProvider(
         if (trimmed.isBlank()) {
             return@withContext LocalVoiceResult(displayName, voiceProfile.providerVoiceId, errorMessage = "No voice text was provided.")
         }
+        val startedAt = System.currentTimeMillis()
         Log.i("LunaKaiLocalVoice", "voiceRequest provider=$displayName speakUrl=$speakUrl voiceId=${voiceProfile.providerVoiceId} voiceLabel=${voiceProfile.label} gender=${voiceProfile.gender} textChars=${trimmed.length}")
         runCatching {
             val payload = JSONObject()
@@ -195,17 +199,17 @@ abstract class LocalHttpVoiceProvider(
                     val audioBase64 = root.optString("audio_base64").ifBlank { root.optString("audioBase64") }
                     if (audioBase64.isNotBlank()) {
                         val decoded = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
-                        Log.i("LunaKaiLocalVoice", "voiceSuccessJson provider=$displayName voiceId=${voiceProfile.providerVoiceId} audioBytes=${decoded.size}")
+                        Log.i("LunaKaiLocalVoice", "voiceSuccessJson provider=$displayName voiceId=${voiceProfile.providerVoiceId} responseMs=${System.currentTimeMillis() - startedAt} audioBytes=${decoded.size}")
                         return@use LocalVoiceResult(displayName, voiceProfile.providerVoiceId, decoded, message = "Voice audio returned by $displayName.")
                     }
                     throw IOException(root.optString("error").ifBlank { root.optString("detail").ifBlank { "Voice server returned JSON without audio bytes." } })
                 }
                 if (bytes.isEmpty()) throw IOException("Voice server returned empty audio bytes.")
-                Log.i("LunaKaiLocalVoice", "voiceSuccess provider=$displayName voiceId=${voiceProfile.providerVoiceId} audioBytes=${bytes.size} contentType=$contentType")
+                Log.i("LunaKaiLocalVoice", "voiceSuccess provider=$displayName voiceId=${voiceProfile.providerVoiceId} responseMs=${System.currentTimeMillis() - startedAt} audioBytes=${bytes.size} contentType=$contentType")
                 LocalVoiceResult(displayName, voiceProfile.providerVoiceId, bytes, mimeType = contentType.ifBlank { "audio/wav" }, message = "Voice audio returned by $displayName.")
             }
         }.getOrElse { error ->
-            Log.w("LunaKaiLocalVoice", "voiceFailed provider=$displayName speakUrl=$speakUrl voiceId=${voiceProfile.providerVoiceId} exception=${error::class.java.simpleName} message=${error.message}", error)
+            Log.w("LunaKaiLocalVoice", "voiceFailed provider=$displayName speakUrl=$speakUrl voiceId=${voiceProfile.providerVoiceId} responseMs=${System.currentTimeMillis() - startedAt} exception=${error::class.java.simpleName} message=${error.message}", error)
             LocalVoiceResult(
                 providerLabel = displayName,
                 voiceId = voiceProfile.providerVoiceId,
@@ -215,54 +219,78 @@ abstract class LocalHttpVoiceProvider(
     }
 }
 
-class LocalKokoroVoiceProvider : LocalHttpVoiceProvider(
+class LocalZonosVoiceProvider(speakUrl: String = LunaKaiLocalConfig.LOCAL_ZONOS_SPEAK_URL) : LocalHttpVoiceProvider(
+    LocalVoiceProviderId.Zonos,
+    "Zonos",
+    speakUrl,
+)
+
+class LocalKokoroVoiceProvider(speakUrl: String = LunaKaiLocalConfig.LOCAL_KOKORO_SPEAK_URL) : LocalHttpVoiceProvider(
     LocalVoiceProviderId.Kokoro,
     "Kokoro",
-    LunaKaiLocalConfig.LOCAL_KOKORO_SPEAK_URL,
+    speakUrl,
 )
 
-class LocalXttsVoiceProvider : LocalHttpVoiceProvider(
+class LocalXttsVoiceProvider(speakUrl: String = LunaKaiLocalConfig.LOCAL_XTTS_SPEAK_URL) : LocalHttpVoiceProvider(
     LocalVoiceProviderId.Xtts,
     "XTTS",
-    LunaKaiLocalConfig.LOCAL_XTTS_SPEAK_URL,
+    speakUrl,
 )
 
-class LocalOpenVoiceProvider : LocalHttpVoiceProvider(
+class LocalOpenVoiceProvider(speakUrl: String = LunaKaiLocalConfig.LOCAL_OPENVOICE_SPEAK_URL) : LocalHttpVoiceProvider(
     LocalVoiceProviderId.OpenVoice,
     "OpenVoice",
-    LunaKaiLocalConfig.LOCAL_OPENVOICE_SPEAK_URL,
+    speakUrl,
 )
 
 object LocalVoiceProviderRegistry {
-    private val providers: List<VoiceProvider> = listOf(
-        LocalKokoroVoiceProvider(),
-        LocalXttsVoiceProvider(),
-        LocalOpenVoiceProvider(),
-    )
+    fun providerFor(profile: CompanionVoiceProfile, serverHost: String): VoiceProvider =
+        providerForId(profile.providerId, serverHost)
 
-    fun providerFor(profile: CompanionVoiceProfile): VoiceProvider {
-        return providers.firstOrNull { it.providerId == profile.providerId } ?: providers.first()
+    fun providerForId(providerId: LocalVoiceProviderId, serverHost: String): VoiceProvider {
+        val host = LunaKaiLocalConfig.normalizeHost(serverHost)
+        return when (providerId) {
+            LocalVoiceProviderId.Zonos -> LocalZonosVoiceProvider(LunaKaiLocalConfig.localZonosSpeakUrl(host))
+            LocalVoiceProviderId.Kokoro -> LocalKokoroVoiceProvider(LunaKaiLocalConfig.localKokoroSpeakUrl(host))
+            LocalVoiceProviderId.Xtts -> LocalXttsVoiceProvider(LunaKaiLocalConfig.localXttsSpeakUrl(host))
+            LocalVoiceProviderId.OpenVoice -> LocalOpenVoiceProvider(LunaKaiLocalConfig.localOpenVoiceSpeakUrl(host))
+        }
     }
 
-    fun profileFor(gender: String, voiceLabel: String): CompanionVoiceProfile {
+    fun providerIdForPreference(raw: String): LocalVoiceProviderId = when (raw.trim().lowercase(Locale.US)) {
+        "zonos" -> LocalVoiceProviderId.Zonos
+        "xtts" -> LocalVoiceProviderId.Xtts
+        "openvoice", "open voice" -> LocalVoiceProviderId.OpenVoice
+        else -> LocalVoiceProviderId.Kokoro
+    }
+
+    fun profileFor(
+        gender: String,
+        voiceLabel: String,
+        preferredProviderId: LocalVoiceProviderId = LocalVoiceProviderId.Kokoro,
+    ): CompanionVoiceProfile {
         val normalizedGender = when {
             gender.equals("Male", ignoreCase = true) || voiceLabel.contains("Male", ignoreCase = true) -> "Male"
             gender.equals("Female", ignoreCase = true) || voiceLabel.contains("Female", ignoreCase = true) || voiceLabel.contains("Feminine", ignoreCase = true) -> "Female"
             else -> "Neutral"
         }
-        val provider = when (normalizedGender) {
-            "Neutral" -> LocalVoiceProviderId.OpenVoice
-            else -> LocalVoiceProviderId.Kokoro
+        val voiceId = when (preferredProviderId) {
+            LocalVoiceProviderId.Zonos -> zonosVoiceIdFor(normalizedGender)
+            LocalVoiceProviderId.Kokoro -> kokoroVoiceIdFor(normalizedGender, voiceLabel)
+            LocalVoiceProviderId.Xtts -> "${normalizedGender.lowercase(Locale.US)}_default"
+            LocalVoiceProviderId.OpenVoice -> "${normalizedGender.lowercase(Locale.US)}_openvoice"
         }
-        val voiceId = kokoroVoiceIdFor(normalizedGender, voiceLabel)
         return CompanionVoiceProfile(
             label = voiceLabel.ifBlank { if (normalizedGender == "Male") "Deep Smooth Male" else if (normalizedGender == "Female") "Soft Female" else "Neutral Calm" },
             gender = normalizedGender,
-            providerId = provider,
+            providerId = preferredProviderId,
             voiceId = voiceId,
             previewText = "Hey, I'm your LunaKai companion.",
         )
     }
+
+    fun kokoroFallbackProfile(profile: CompanionVoiceProfile): CompanionVoiceProfile =
+        profile.copy(providerId = LocalVoiceProviderId.Kokoro, voiceId = kokoroVoiceIdFor(profile.gender, profile.label))
 
     private fun kokoroVoiceIdFor(gender: String, voiceLabel: String): String {
         val normalized = voiceLabel.lowercase(Locale.US)
@@ -276,8 +304,14 @@ object LocalVoiceProviderRegistry {
                 "deep" in normalized || "low" in normalized || "midnight" in normalized || "velvet" in normalized || "romantic" in normalized -> "am_michael"
                 else -> "am_adam"
             }
-            else -> "neutral_default"
+            else -> "af_heart"
         }
+    }
+
+    private fun zonosVoiceIdFor(gender: String): String = when (gender) {
+        "Male" -> "male_default"
+        "Female" -> "female_default"
+        else -> "default"
     }
 }
 
@@ -344,6 +378,7 @@ class LocalLiveCompanionRepository(
     private val sttProvider: SpeechToTextProvider = LocalFasterWhisperProvider(),
     private val turnTakingController: TurnTakingController = TurnTakingController(),
     private val avatarPlaybackController: AvatarPlaybackController = AvatarPlaybackController(),
+    private val voiceWarmupClient: OkHttpClient = localRealtimeHttpClient(),
 ) {
     companion object {
         private var connected = false
@@ -363,29 +398,58 @@ class LocalLiveCompanionRepository(
         }
     }
 
+    private suspend fun warmUpKokoroVoice(serverHost: String): String = withContext(Dispatchers.IO) {
+        val startedAt = System.currentTimeMillis()
+        val warmupUrl = LunaKaiLocalConfig.localKokoroWarmupUrl(serverHost)
+        Log.i("LunaKaiLocalVoice", "voiceWarmupStart url=$warmupUrl")
+        runCatching {
+            val request = Request.Builder()
+                .url(warmupUrl)
+                .post(JSONObject().toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            voiceWarmupClient.newCall(request).execute().use { response ->
+                val bodyText = response.body?.string().orEmpty()
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                if (!response.isSuccessful) throw IOException("HTTP ${response.code}: ${bodyText.take(500)}")
+                val pipelineLoaded = runCatching { JSONObject(bodyText).optBoolean("pipeline_loaded", false) }.getOrDefault(false)
+                Log.i("LunaKaiLocalVoice", "voiceWarmupSuccess responseMs=$elapsedMs pipelineLoaded=$pipelineLoaded bodyChars=${bodyText.length}")
+                ""
+            }
+        }.getOrElse { error ->
+            val elapsedMs = System.currentTimeMillis() - startedAt
+            Log.w("LunaKaiLocalVoice", "voiceWarmupFailed responseMs=$elapsedMs url=$warmupUrl exception=${error::class.java.simpleName} message=${error.message}", error)
+            "Kokoro voice warmup did not finish at $warmupUrl: ${error.message}"
+        }
+    }
+
     suspend fun startAudioConversation(
         context: Context,
         companion: CompanionContext,
         modeLabel: String,
         answerPhrase: String? = null,
+        onPhase: (LiveCallPhase, String) -> Unit = { _, _ -> },
     ): LocalLiveSessionState = withContext(Dispatchers.IO) {
         connected = true
         val adultMode = companion.isAdultModeActiveForLive()
         Log.i(
             "LunaKaiModelRoute",
-            "liveCompanion provider=Ollama endpoint=${LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT} model=${LunaKaiLocalConfig.OLLAMA_MODEL} activeCompanionName=${companion.companionName} activeCompanionMode=${companion.characterMode} adultMode=$adultMode adultPromptIncluded=$adultMode selectedVoice=${companion.voice} modeLabel=$modeLabel",
+            "liveCompanion provider=Ollama endpoint=${companion.adultProviderEndpoint.ifBlank { LunaKaiLocalConfig.ollamaGenerateEndpoint(companion.serverHost) }} model=${LunaKaiLocalConfig.OLLAMA_MODEL} activeCompanionName=${companion.companionName} activeCompanionMode=${companion.characterMode} adultMode=$adultMode adultPromptIncluded=$adultMode selectedVoice=${companion.voice} localVoiceProvider=${companion.localVoiceProviderId} serverHost=${companion.serverHost} modeLabel=$modeLabel",
         )
+        onPhase(LiveCallPhase.GeneratingVoice, "Warming up LunaKai voice...")
+        val warmupMessage = withTimeoutOrNull(8_000L) { warmUpKokoroVoice(companion.serverHost) }
+            ?: "Kokoro voice warmup is taking longer than expected; continuing with call setup."
+        val voiceSetupMessage = warmupMessage.takeIf { it.isNotBlank() }
         val openingLine = answerPhrase?.trim().orEmpty()
         if (openingLine.isBlank()) {
-            return@withContext LocalLiveSessionState.Connected("Local live $modeLabel is connected. Tap Mic to record a turn through faster-whisper.")
+            return@withContext LocalLiveSessionState.Connected("Local live $modeLabel is connected. Tap Mic to record a turn through faster-whisper.", voiceSetupMessage = voiceSetupMessage)
         }
-        val voiceResult = speakCompanionText(context, companion, openingLine)
+        val voiceResult = speakCompanionText(context, companion, openingLine) { onPhase(LiveCallPhase.Speaking, "Speaking...") }
         if (voiceResult.isSuccess) {
             LocalLiveSessionState.Connected("${voiceResult.providerLabel} played ${voiceResult.voiceId} for the opening answer.")
         } else {
             LocalLiveSessionState.Connected(
                 message = "Local live $modeLabel is connected. Transcript works; voice setup still needs attention.",
-                voiceSetupMessage = voiceResult.errorMessage ?: "Local voice provider is not ready.",
+                voiceSetupMessage = voiceResult.errorMessage ?: voiceSetupMessage ?: "Local voice provider is not ready.",
             )
         }
     }
@@ -394,9 +458,12 @@ class LocalLiveCompanionRepository(
         context: Context,
         companion: CompanionContext,
         history: List<CompanionChatTurn>,
+        onPhase: (LiveCallPhase, String) -> Unit = { _, _ -> },
     ): LocalLiveTurnResult = withContext(Dispatchers.IO) {
         if (!connected) return@withContext LocalLiveTurnResult(errorMessage = "Live Companion is not connected. Tap Call first.")
         stopCurrentAudio()
+        onPhase(LiveCallPhase.Listening, "Listening...")
+        Log.i("LunaKaiLocalSTT", "pushToTalkRecordStart connected=$connected")
         val captured = LocalMicrophoneRecorder.recordWav(
             minimumSpeechDurationMillis = turnTakingController.minimumSpeechDurationMillis,
             silenceDetectionMillis = turnTakingController.silenceDetectionMillis,
@@ -404,7 +471,9 @@ class LocalLiveCompanionRepository(
         if (!captured.hadSpeech) {
             return@withContext LocalLiveTurnResult(errorMessage = "I did not catch enough speech. Try again closer to the microphone.")
         }
-        val stt = sttProvider.transcribe(captured.wavBytes)
+        Log.i("LunaKaiLocalSTT", "pushToTalkRecordResult durationMs=${captured.durationMs} hadSpeech=${captured.hadSpeech} wavBytes=${captured.wavBytes.size}")
+        onPhase(LiveCallPhase.ProcessingSpeech, "Processing speech...")
+        val stt = LocalFasterWhisperProvider(LunaKaiLocalConfig.localSttTranscribeUrl(companion.serverHost)).transcribe(captured.wavBytes)
         if (!stt.isSuccess) {
             return@withContext LocalLiveTurnResult(errorMessage = stt.errorMessage ?: "Local speech transcription did not return text.")
         }
@@ -412,13 +481,15 @@ class LocalLiveCompanionRepository(
         if (!turnTakingController.shouldAcceptFinalTranscript(transcript, captured.durationMs)) {
             return@withContext LocalLiveTurnResult(transcript = transcript, errorMessage = "That sounded too short or duplicated, so LunaKai did not send it again.")
         }
+        onPhase(LiveCallPhase.GeneratingReply, "Thinking...")
         val replyState = brainProvider.generateReply(companion, transcript, history)
         val reply = when (replyState) {
             CompanionBrainState.Loading -> return@withContext LocalLiveTurnResult(transcript = transcript, errorMessage = "LunaKai is still thinking.")
             is CompanionBrainState.Error -> return@withContext LocalLiveTurnResult(transcript = transcript, errorMessage = replyState.message)
             is CompanionBrainState.Success -> replyState.text.trim()
         }
-        val voiceResult = speakCompanionText(context, companion, reply)
+        onPhase(LiveCallPhase.GeneratingVoice, "Generating voice...")
+        val voiceResult = speakCompanionText(context, companion, reply) { onPhase(LiveCallPhase.Speaking, "Speaking...") }
         LocalLiveTurnResult(
             transcript = transcript,
             reply = reply,
@@ -427,19 +498,31 @@ class LocalLiveCompanionRepository(
         )
     }
 
-    suspend fun speakCompanionText(context: Context, companion: CompanionContext, text: String): LocalVoiceResult {
-        val voiceProfile = LocalVoiceProviderRegistry.profileFor(companion.gender, companion.voice)
-        val provider = LocalVoiceProviderRegistry.providerFor(voiceProfile)
+    suspend fun speakCompanionText(context: Context, companion: CompanionContext, text: String, onPlaybackStarted: () -> Unit = {}): LocalVoiceResult {
+        val selectedProvider = LocalVoiceProviderRegistry.providerIdForPreference(companion.localVoiceProviderId)
+        val voiceProfile = LocalVoiceProviderRegistry.profileFor(companion.gender, companion.voice, selectedProvider)
+        val provider = LocalVoiceProviderRegistry.providerFor(voiceProfile, companion.serverHost)
+        Log.i("LunaKaiLocalVoice", "speakCompanionText selectedVoiceId=${voiceProfile.providerVoiceId} voiceLabel=${voiceProfile.label} provider=${provider.displayName} textChars=${text.trim().length} serverHost=${companion.serverHost}")
         val voiceResult = provider.speak(text, voiceProfile)
-        if (!voiceResult.isSuccess) return voiceResult
-        return playVoiceResult(context, voiceResult)
+        val finalVoiceResult = if (!voiceResult.isSuccess && selectedProvider == LocalVoiceProviderId.Zonos) {
+            val fallbackProfile = LocalVoiceProviderRegistry.kokoroFallbackProfile(voiceProfile)
+            val fallbackProvider = LocalVoiceProviderRegistry.providerFor(fallbackProfile, companion.serverHost)
+            Log.w("LunaKaiLocalVoice", "zonosUnavailableTryingKokoroFallback zonosError=${voiceResult.errorMessage} fallbackVoiceId=${fallbackProfile.providerVoiceId}")
+            val fallbackResult = fallbackProvider.speak(text, fallbackProfile)
+            if (fallbackResult.isSuccess) fallbackResult.copy(message = "Zonos unavailable; Kokoro fallback played ${fallbackResult.voiceId}.") else voiceResult.copy(errorMessage = "${voiceResult.errorMessage}\nKokoro fallback also failed: ${fallbackResult.errorMessage}")
+        } else {
+            voiceResult
+        }
+        if (!finalVoiceResult.isSuccess) return finalVoiceResult
+        return playVoiceResult(context, finalVoiceResult, onPlaybackStarted)
     }
 
-    private suspend fun playVoiceResult(context: Context, voiceResult: LocalVoiceResult): LocalVoiceResult {
+    private suspend fun playVoiceResult(context: Context, voiceResult: LocalVoiceResult, onPlaybackStarted: () -> Unit): LocalVoiceResult {
         val audioBytes = voiceResult.audioBytes ?: return voiceResult.copy(errorMessage = "Voice provider returned no audio bytes.")
         val audioFile = withContext(Dispatchers.IO) {
             File(context.cacheDir, "lunakai_voice_${System.currentTimeMillis()}.wav").apply {
                 writeBytes(audioBytes)
+                Log.i("LunaKaiLocalVoice", "voiceAudioSaved path=$absolutePath audioBytes=${audioBytes.size} mimeType=${voiceResult.mimeType} selectedVoiceId=${voiceResult.voiceId}")
             }
         }
         return withContext(Dispatchers.Main) {
@@ -455,12 +538,14 @@ class LocalLiveCompanionRepository(
                     )
                     setDataSource(audioFile.absolutePath)
                     setOnCompletionListener {
+                        Log.i("LunaKaiLocalVoice", "playbackComplete path=${audioFile.absolutePath} selectedVoiceId=${voiceResult.voiceId}")
                         avatarPlaybackController.onVoicePlaybackEnded()
                         stopSharedAudioPlayback()
                         runCatching { audioFile.delete() }
                         if (continuation.isActive) continuation.resume(voiceResult.copy(message = "Played ${voiceResult.providerLabel} voice ${voiceResult.voiceId}."))
                     }
                     setOnErrorListener { _, what, extra ->
+                        Log.w("LunaKaiLocalVoice", "playbackError path=${audioFile.absolutePath} selectedVoiceId=${voiceResult.voiceId} what=$what extra=$extra")
                         avatarPlaybackController.onVoicePlaybackEnded()
                         stopSharedAudioPlayback()
                         runCatching { audioFile.delete() }
@@ -468,6 +553,8 @@ class LocalLiveCompanionRepository(
                         true
                     }
                     prepare()
+                    Log.i("LunaKaiLocalVoice", "playbackStart path=${audioFile.absolutePath} selectedVoiceId=${voiceResult.voiceId} speed=1.0")
+                    onPlaybackStarted()
                     start()
                 }
                 sharedMediaPlayer = player
@@ -499,7 +586,7 @@ class LocalLiveCompanionRepository(
 
 object LocalMicrophoneRecorder {
     private const val SAMPLE_RATE = 16_000
-    private const val SILENCE_RMS_THRESHOLD = 450.0
+    private const val SILENCE_RMS_THRESHOLD = 250.0
     private const val MAX_RECORDING_MILLIS = 7_000L
 
     @SuppressLint("MissingPermission")
@@ -528,6 +615,7 @@ object LocalMicrophoneRecorder {
         val startedAt = System.currentTimeMillis()
         var lastVoiceAt = startedAt
         var hadSpeech = false
+        Log.i("LunaKaiLocalSTT", "recordStart sampleRate=$SAMPLE_RATE minBuffer=$minBuffer silenceThreshold=$SILENCE_RMS_THRESHOLD minimumSpeechMs=$minimumSpeechDurationMillis silenceMs=$silenceDetectionMillis")
         recorder.startRecording()
         try {
             while (System.currentTimeMillis() - startedAt < MAX_RECORDING_MILLIS) {
@@ -556,7 +644,9 @@ object LocalMicrophoneRecorder {
             runCatching { recorder.release() }
         }
         val durationMs = System.currentTimeMillis() - startedAt
-        CapturedSpeechAudio(wavHeader(pcm.size(), SAMPLE_RATE) + pcm.toByteArray(), durationMs, hadSpeech)
+        val wavBytes = wavHeader(pcm.size(), SAMPLE_RATE) + pcm.toByteArray()
+        Log.i("LunaKaiLocalSTT", "recordStop durationMs=$durationMs hadSpeech=$hadSpeech pcmBytes=${pcm.size()} wavBytes=${wavBytes.size}")
+        CapturedSpeechAudio(wavBytes, durationMs, hadSpeech)
     }
 
     private fun wavHeader(pcmDataSize: Int, sampleRate: Int): ByteArray {

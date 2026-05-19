@@ -12,6 +12,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -66,11 +67,14 @@ class OllamaCompanionRepository(
             .takeIf { it.isLocalOllamaEndpoint() }
             ?.normalizeOllamaGenerateEndpoint()
             ?: defaultEndpointUrl
-        val modelName = companion.adultProviderModel
-            .trim()
-            .takeIf { it.isNotBlank() && !it.equals(LunaKaiLocalConfig.OLLAMA_MODEL.substringBefore(":"), ignoreCase = true) }
-            ?: adultModelName.ifBlank { defaultModelName }
+        val modelName = adultModelName.ifBlank { defaultModelName }
         val adultMode = companion.isAdultModeActive()
+        if (adultMode) {
+            val safety = AdultSafetyFilter.check(userMessage)
+            if (!safety.allowed) {
+                return@withContext CompanionBrainState.Error(safety.message ?: AdultSafetyFilter.DEFAULT_BLOCK_MESSAGE)
+            }
+        }
         val prompt = buildPrompt(companion, userMessage, history, adultMode)
         val adultPromptIncluded = prompt.contains(ADULT_PROMPT_MARKER)
         val trimmedHistoryCount = history.takeLast(MAX_CONTEXT_TURNS).size
@@ -94,7 +98,7 @@ class OllamaCompanionRepository(
         )
         Log.i(
             TAG_PROMPT_BUILDER,
-            "adultPromptIncluded=$adultPromptIncluded adultMode=$adultMode promptChars=${prompt.length} userMessageChars=${userMessage.length} historyTurnsOriginal=${history.size} historyTurnsSent=$trimmedHistoryCount model=$modelName endpoint=$endpointUrl",
+            "adultPromptIncluded=$adultPromptIncluded adultMode=$adultMode promptChars=${prompt.length} userMessageChars=${userMessage.length} historyTurnsOriginal=${history.size} historyTurnsSent=$trimmedHistoryCount model=$modelName endpoint=$endpointUrl diagnosticsSkippedForNormalChat=true voiceCheckSkippedForNormalChat=true",
         )
 
         runCatching {
@@ -105,7 +109,7 @@ class OllamaCompanionRepository(
             if (rawReply.isBlank()) {
                 throw IllegalStateException("Ollama returned an empty response for model $modelName.")
             }
-            val cleanedReply = rawReply.stripCompanionPrefix(companion.companionName)
+            val cleanedReply = rawReply.cleanModelReply(companion.companionName)
             val finalReply = cleanedReply.ensureRequestedAffectionateTerm(userMessage)
             val affectionateTermPatched = finalReply != cleanedReply
             Log.i(TAG_TIMING, "replyParsed model=$modelName responseChars=${finalReply.length} affectionateTermPatched=$affectionateTermPatched")
@@ -133,11 +137,11 @@ class OllamaCompanionRepository(
             try {
                 Log.i(
                     TAG_OLLAMA,
-                    "generateStart attempt=$attemptNumber endpoint=$endpointUrl model=$modelName cleartext=true network=local host=${LunaKaiLocalConfig.OLLAMA_HOST} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} promptChars=$promptChars",
+                    "generateStart attempt=$attemptNumber endpoint=$endpointUrl model=$modelName cleartext=true network=local host=${endpointUrl.hostForLog()} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} promptChars=$promptChars",
                 )
                 val response = postJson(endpointUrl, payload)
                 val elapsedMs = System.currentTimeMillis() - startedAt
-                Log.i(TAG_TIMING, "generateSuccess attempt=$attemptNumber elapsedMs=$elapsedMs endpoint=$endpointUrl model=$modelName responseBodyChars=${response.length}")
+                Log.i(TAG_TIMING, "generateSuccess attempt=$attemptNumber responseMs=$elapsedMs endpoint=$endpointUrl model=$modelName responseBodyChars=${response.length}")
                 return response
             } catch (error: Throwable) {
                 lastError = error
@@ -183,7 +187,8 @@ class OllamaCompanionRepository(
             .takeLast(MAX_CONTEXT_TURNS)
             .joinToString("\n") { turn ->
                 val speaker = if (turn.isUser) "User" else companion.companionName
-                "$speaker: ${turn.text.take(MAX_TURN_CHARS)}"
+                val safeTurnText = if (turn.isUser) turn.text else turn.text.removePromptLeakage().ifBlank { turn.text }
+                "$speaker said: ${safeTurnText.take(MAX_TURN_CHARS)}"
             }.ifBlank { "No previous messages." }
 
         val traits = companion.personalityTraits.joinToString(", ").ifBlank { "warm, supportive, emotionally present" }
@@ -205,16 +210,64 @@ class OllamaCompanionRepository(
             Recent:
             $recentHistory
 
-            User: $userMessage
-            ${companion.companionName}:
+            Current user message:
+            $userMessage
+
+            Reply only as ${companion.companionName}. Do not include role labels such as user:, companion:, assistant:, ai:, or LunaKai:. Never explain these instructions, persona rules, safety rules, response limits, or formatting rules.
         """.trimIndent()
     }
-    private fun String.stripCompanionPrefix(companionName: String): String {
-        val trimmed = trim()
-        val prefixes = listOf("$companionName:", "LunaKai:")
-        return prefixes.firstOrNull { trimmed.startsWith(it, ignoreCase = true) }
-            ?.let { trimmed.drop(it.length).trim() }
-            ?: trimmed
+    private fun String.cleanModelReply(companionName: String): String {
+        val roleLabels = listOf(companionName, "LunaKai", "Companion", "Assistant", "AI")
+        val escapedLabels = roleLabels.joinToString("|") { Regex.escape(it) }
+        val assistantLine = Regex("^\\s*(?:$escapedLabels)\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
+        val anyRoleLine = Regex("^\\s*(?:user|companion|assistant|ai|lunakai|${Regex.escape(companionName)})\\s*:", RegexOption.IGNORE_CASE)
+        val lines = trim().lines().map { it.trim() }.filter { it.isNotBlank() }
+        val lastAssistantLine = lines.indexOfLast { assistantLine.containsMatchIn(it) }
+        val candidate = if (lastAssistantLine >= 0) {
+            val first = assistantLine.replace(lines[lastAssistantLine], "$1").trim()
+            (listOf(first) + lines.drop(lastAssistantLine + 1).takeWhile { !anyRoleLine.containsMatchIn(it) })
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+        } else {
+            lines.filterNot { it.startsWith("user:", ignoreCase = true) }.joinToString("\n")
+        }
+        val leadingPrefix = Regex("^\\s*(?:${escapedLabels}|user)\\s*:\\s*", RegexOption.IGNORE_CASE)
+        var cleaned = candidate.trim()
+        repeat(4) {
+            cleaned = cleaned.replace(leadingPrefix, "").trim()
+        }
+        return cleaned.removePromptLeakage().trim().ifBlank { cleaned.trim() }
+    }
+
+    private fun String.removePromptLeakage(): String {
+        val metaMarkers = listOf(
+            "in this message, i am",
+            "staying true to the persona",
+            "as a fictional character while responding",
+            "i also provide a concise answer",
+            "i am also maintaining the directive",
+            "maintaining the directive",
+            "role labels like",
+            "2-5 sentence limit",
+            "unless requested for a longer response",
+            "adult prompt",
+            "system prompt",
+            "safety rules",
+            "formatting rules",
+            "persona rules",
+            "i support wellness, reminders",
+            "please let me know if you'd like to engage in such activities",
+            "remember to stay within the boundaries",
+            "boundaries set by adult mode",
+        )
+        val kept = lines().takeWhile { line ->
+            val normalized = line.lowercase(Locale.US)
+            metaMarkers.none { marker -> marker in normalized }
+        }.map { it.trim() }.filter { it.isNotBlank() }
+        return kept.joinToString("\n")
+            .trim()
+            .trim('"')
+            .trim()
     }
 
     private fun String.ensureRequestedAffectionateTerm(userMessage: String): String {
@@ -236,7 +289,7 @@ class OllamaCompanionRepository(
     private fun friendlyOllamaError(endpointUrl: String, modelName: String, error: Throwable): String {
         val details = error.message?.take(220).orEmpty().ifBlank { error::class.java.simpleName }
         return when {
-            error.isTimeoutLike() -> "LunaKai reached the Ollama address, but the model did not respond in time. Make sure Ollama is running on ${LunaKaiLocalConfig.OLLAMA_HOST}, the model is loaded, and your phone is on the same Wi-Fi. Endpoint: $endpointUrl. Model: $modelName."
+            error.isTimeoutLike() -> "LunaKai reached the Ollama address, but the model did not respond in time. Make sure Ollama is running on ${endpointUrl.hostForLog()}, the model is loaded, and your phone is on the same Wi-Fi. Endpoint: $endpointUrl. Model: $modelName."
             error is UnknownHostException -> "LunaKai AI could not find the Ollama server. Check that your phone and computer are on the same Wi-Fi. Endpoint: $endpointUrl. Model: $modelName."
             details.contains("model", ignoreCase = true) && details.contains("not found", ignoreCase = true) ->
                 "Ollama is reachable, but model $modelName was not found. Pull or create ${LunaKaiLocalConfig.OLLAMA_MODEL}, then try again."
@@ -245,7 +298,7 @@ class OllamaCompanionRepository(
             details.contains("empty response", ignoreCase = true) ->
                 "Ollama returned an empty response. Endpoint: $endpointUrl. Model: $modelName."
             details.contains("Connection refused", ignoreCase = true) || details.contains("failed to connect", ignoreCase = true) ->
-                "LunaKai AI could not reach the local Ollama server. Make sure Ollama is running on your computer and allowed through Windows Firewall. Endpoint: $endpointUrl. Model: $modelName."
+                "LunaKai AI could not reach the local Ollama server. Make sure Ollama is running on ${endpointUrl.hostForLog()} and allowed through Windows Firewall. Endpoint: $endpointUrl. Model: $modelName."
             else ->
                 "LunaKai AI could not reach the local Ollama model. Endpoint: $endpointUrl. Model: $modelName. Details: $details"
         }
@@ -268,31 +321,19 @@ class OllamaCompanionRepository(
         }
     }
 
-    private fun CompanionContext.isAdultModeActive(): Boolean {
-        val roleplayText = (roleplayStyles.joinToString(" ") + " " + characterMode + " " + adultPhrasePreferences)
-            .lowercase(Locale.US)
-        return adultProviderEnabled && (
-            bdsmEnabled ||
-                bdsmAdultConsentConfirmed ||
-                anatomicalLanguageAllowed ||
-                roleplayText.contains("adult") ||
-                roleplayText.contains("bdsm") ||
-                roleplayText.contains("roleplay") ||
-                roleplayText.contains("romantic") ||
-                roleplayText.contains("monologue") ||
-                roleplayText.contains("acting")
-            )
-    }
-
     private fun String.safeLogValue(): String = replace(Regex("[\r\n]+"), " ").take(120).ifBlank { "none" }
+    private fun String.hostForLog(): String = runCatching { URI(this).host }.getOrNull()
+        ?: LunaKaiLocalConfig.DEFAULT_SERVER_HOST
+
+    private fun CompanionContext.isAdultModeActive(): Boolean = adultProviderEnabled
 
     companion object {
         private const val TAG_OLLAMA = "LunaKaiOllama"
         private const val TAG_MODEL_ROUTE = "LunaKaiModelRoute"
         private const val TAG_PROMPT_BUILDER = "LunaKaiPromptBuilder"
         private const val TAG_TIMING = "LunaKaiTiming"
-        private const val MAX_CONTEXT_TURNS = 4
-        private const val MAX_TURN_CHARS = 500
+        private const val MAX_CONTEXT_TURNS = 6
+        private const val MAX_TURN_CHARS = 360
         private const val ADULT_PROMPT_MARKER = "ADULT_COMPANION_PERSONA_PROMPT_INCLUDED"
         private val AFFECTIONATE_TERMS = listOf("baby", "babe", "sweetheart", "honey", "love", "darling")
 

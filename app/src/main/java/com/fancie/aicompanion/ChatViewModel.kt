@@ -54,7 +54,7 @@ class ChatViewModel(
             return
         }
 
-        migrateLegacyMessagesIfNeeded(uid, companionId, chatId)
+        Log.i(TAG, "Fresh chat session $chatId will not import legacy chat history for $companionId.")
 
         listenerRegistration = firestoreProvider()
             .collection("users")
@@ -81,6 +81,10 @@ class ChatViewModel(
                             mode = data["mode"] as? String ?: ChatMessage.MODE_TEXT,
                             createdAt = data["createdAt"].toCreatedAtMillis(),
                         )
+                    }.filter { message ->
+                        message.chatId == chatId &&
+                            message.companionId == companionId &&
+                            message.sender != ChatMessage.SENDER_SYSTEM
                     }
                     _chatStatus.value = null
                 }
@@ -203,19 +207,11 @@ class ChatViewModel(
                 launch { saveMessage(userMessage, companion.name) }
 
                 val localContext = companionContext.copy(
-                    adultProviderEndpoint = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT,
+                    adultProviderEndpoint = companionContext.adultProviderEndpoint.ifBlank { LunaKaiLocalConfig.ollamaGenerateEndpoint(companionContext.serverHost) },
                     adultProviderModel = LunaKaiLocalConfig.OLLAMA_MODEL,
                     adultProviderEnabled = true,
                 )
-                val result = if (
-                    localContext.bdsmEnabled &&
-                    localContext.bdsmAdultConsentConfirmed &&
-                    localContext.adultProviderEnabled
-                ) {
-                    adultRoleplayRepository.sendMessage(localContext, trimmed, history)
-                } else {
-                    ollamaRepository.sendMessage(localContext, trimmed, history)
-                }
+                val result = ollamaRepository.sendMessage(localContext, trimmed, history)
 
                 when (result) {
                     CompanionBrainState.Loading -> Unit
@@ -235,17 +231,8 @@ class ChatViewModel(
                     }
 
                     is CompanionBrainState.Error -> {
-                        val reply = newMessage(
-                            chatId = chatId,
-                            companionId = companion.id,
-                            sender = ChatMessage.SENDER_SYSTEM,
-                            text = result.message,
-                            mode = mode,
-                        )
-                        appendOptimistic(reply)
                         _companionBrainState.value = result
                         _chatStatus.value = result.message
-                        launch { saveMessage(reply, companion.name) }
                     }
                 }
             } finally {

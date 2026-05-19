@@ -23,4 +23,6 @@ data class ChatMessage(
     }
 }
 
-fun stableChatIdForCompanion(companionId: String): String = "chat_$companionId"
+private val activeChatSessionStartedAt: Long = System.currentTimeMillis()
+
+fun stableChatIdForCompanion(companionId: String): String = "chat_${companionId}_$activeChatSessionStartedAt"

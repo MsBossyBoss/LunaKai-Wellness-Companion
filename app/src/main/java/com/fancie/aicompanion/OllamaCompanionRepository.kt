@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InterruptedIOException
@@ -69,15 +70,15 @@ class OllamaCompanionRepository(
             ?: defaultEndpointUrl
         val modelName = adultModelName.ifBlank { defaultModelName }
         val adultMode = companion.isAdultModeActive()
-        if (adultMode) {
-            val safety = AdultSafetyFilter.check(userMessage)
-            if (!safety.allowed) {
-                return@withContext CompanionBrainState.Error(safety.message ?: AdultSafetyFilter.DEFAULT_BLOCK_MESSAGE)
-            }
-        }
-        val prompt = buildPrompt(companion, userMessage, history, adultMode)
+        val simpleGreeting = userMessage.isSimpleGreetingRequest()
+        val prompt = buildPrompt(companion, userMessage, history, adultMode, simpleGreeting)
         val adultPromptIncluded = prompt.contains(ADULT_PROMPT_MARKER)
-        val trimmedHistoryCount = history.takeLast(MAX_CONTEXT_TURNS).size
+        val trimmedHistoryCount = history.filterNot { it.text.startsWith("LunaKai AI could not reach") || it.text.startsWith("I couldn't connect") }.takeLast(MAX_CONTEXT_TURNS).size
+        val stopSequences = mutableListOf("\nUser:", "\nuser:", "\nCompanion:", "\ncompanion:", "\nAssistant:", "\nassistant:")
+        if (simpleGreeting) {
+            stopSequences += listOf(".", "!", "?")
+        }
+        val numPredict = userMessage.numPredictForRequest()
         val payload = JSONObject()
             .put("model", modelName)
             .put("prompt", prompt)
@@ -88,21 +89,22 @@ class OllamaCompanionRepository(
                 JSONObject()
                     .put("temperature", LunaKaiLocalConfig.OLLAMA_TEMPERATURE)
                     .put("top_p", LunaKaiLocalConfig.OLLAMA_TOP_P)
-                    .put("num_predict", LunaKaiLocalConfig.OLLAMA_NUM_PREDICT)
+                    .put("num_predict", numPredict)
                     .put("num_ctx", LunaKaiLocalConfig.OLLAMA_NUM_CTX)
+                    .put("stop", JSONArray(stopSequences))
             )
 
         Log.i(
             TAG_MODEL_ROUTE,
-            "provider=Ollama endpoint=$endpointUrl model=$modelName activeCompanionName=${companion.companionName.safeLogValue()} activeCompanionMode=${companion.characterMode.safeLogValue()} adultMode=$adultMode roleplayMode=${companion.roleplayStyles.joinToString("|").safeLogValue()} adultPromptIncluded=$adultPromptIncluded keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
+            "chatApi=LunaKai AI Adult provider=Ollama endpoint=$endpointUrl model=$modelName activeCompanionName=${companion.companionName.safeLogValue()} activeCompanionMode=${companion.characterMode.safeLogValue()} adultMode=$adultMode roleplayMode=${companion.roleplayStyles.joinToString("|").safeLogValue()} adultPromptIncluded=$adultPromptIncluded keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
         )
         Log.i(
             TAG_PROMPT_BUILDER,
-            "adultPromptIncluded=$adultPromptIncluded adultMode=$adultMode promptChars=${prompt.length} userMessageChars=${userMessage.length} historyTurnsOriginal=${history.size} historyTurnsSent=$trimmedHistoryCount model=$modelName endpoint=$endpointUrl diagnosticsSkippedForNormalChat=true voiceCheckSkippedForNormalChat=true",
+            "chatApi=LunaKai AI Adult adultPromptIncluded=$adultPromptIncluded adultMode=$adultMode promptChars=${prompt.length} userMessageChars=${userMessage.length} historyTurnsOriginal=${history.size} historyTurnsSent=$trimmedHistoryCount num_predict=$numPredict simpleGreeting=$simpleGreeting connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} model=$modelName endpoint=$endpointUrl diagnosticsSkippedForNormalChat=true providerChecksSkippedForNormalChat=true voiceCheckSkippedForNormalChat=true",
         )
 
         runCatching {
-            val responseText = postGenerateWithColdStartRetry(endpointUrl, modelName, payload, prompt.length)
+            val responseText = postGenerateWithColdStartRetry(endpointUrl, modelName, payload, prompt.length, trimmedHistoryCount, numPredict, adultMode, adultPromptIncluded)
             val rawReply = JSONObject(responseText)
                 .optString("response")
                 .trim()
@@ -110,14 +112,17 @@ class OllamaCompanionRepository(
                 throw IllegalStateException("Ollama returned an empty response for model $modelName.")
             }
             val cleanedReply = rawReply.cleanModelReply(companion.companionName)
-            val finalReply = cleanedReply.ensureRequestedAffectionateTerm(userMessage)
+            val finalReply = cleanedReply
+                .ensureRequestedAffectionateTerm(userMessage)
+                .fallbackIfSimpleGreetingDrifted(userMessage)
+                .fallbackIfDirectShortMessageDrifted(userMessage, history)
             val affectionateTermPatched = finalReply != cleanedReply
-            Log.i(TAG_TIMING, "replyParsed model=$modelName responseChars=${finalReply.length} affectionateTermPatched=$affectionateTermPatched")
+            Log.i(TAG_TIMING, "replyParsed chatApi=LunaKai AI Adult model=$modelName responseChars=${finalReply.length} affectionateTermPatched=$affectionateTermPatched simpleGreeting=$simpleGreeting")
             CompanionBrainState.Success(finalReply)
         }.getOrElse { error ->
             Log.e(
                 TAG_OLLAMA,
-                "requestFailed provider=Ollama endpoint=$endpointUrl model=$modelName adultMode=$adultMode adultPromptIncluded=$adultPromptIncluded exception=${error::class.java.simpleName} message=${error.message} timeout=${error.isTimeoutLike()}",
+                "requestFailed chatApi=LunaKai AI Adult provider=Ollama endpoint=$endpointUrl model=$modelName adultMode=$adultMode adultPromptIncluded=$adultPromptIncluded exception=${error::class.java.simpleName} message=${error.message} timeout=${error.isTimeoutLike()}",
                 error,
             )
             CompanionBrainState.Error(friendlyOllamaError(endpointUrl, modelName, error), error)
@@ -129,6 +134,10 @@ class OllamaCompanionRepository(
         modelName: String,
         payload: JSONObject,
         promptChars: Int,
+        historyTurnsIncluded: Int,
+        numPredict: Int,
+        adultMode: Boolean,
+        adultPromptIncluded: Boolean,
     ): String {
         var lastError: Throwable? = null
         repeat(2) { attempt ->
@@ -137,11 +146,11 @@ class OllamaCompanionRepository(
             try {
                 Log.i(
                     TAG_OLLAMA,
-                    "generateStart attempt=$attemptNumber endpoint=$endpointUrl model=$modelName cleartext=true network=local host=${endpointUrl.hostForLog()} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} promptChars=$promptChars",
+                    "generateStart chatApi=LunaKai AI Adult attempt=$attemptNumber endpoint=$endpointUrl model=$modelName cleartext=true network=local host=${endpointUrl.hostForLog()} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} promptChars=$promptChars historyTurnsIncluded=$historyTurnsIncluded num_predict=$numPredict adultMode=$adultMode adultPromptIncluded=$adultPromptIncluded diagnosticsSkippedForNormalChat=true providerChecksSkippedForNormalChat=true voiceCheckSkippedForNormalChat=true",
                 )
                 val response = postJson(endpointUrl, payload)
                 val elapsedMs = System.currentTimeMillis() - startedAt
-                Log.i(TAG_TIMING, "generateSuccess attempt=$attemptNumber responseMs=$elapsedMs endpoint=$endpointUrl model=$modelName responseBodyChars=${response.length}")
+                Log.i(TAG_TIMING, "generateSuccess chatApi=LunaKai AI Adult attempt=$attemptNumber responseMs=$elapsedMs retryUsed=${attemptNumber > 1} endpoint=$endpointUrl model=$modelName promptChars=$promptChars historyTurnsIncluded=$historyTurnsIncluded num_predict=$numPredict adultMode=$adultMode adultPromptIncluded=$adultPromptIncluded diagnosticsSkippedForNormalChat=true providerChecksSkippedForNormalChat=true voiceCheckSkippedForNormalChat=true responseBodyChars=${response.length}")
                 return response
             } catch (error: Throwable) {
                 lastError = error
@@ -181,6 +190,7 @@ class OllamaCompanionRepository(
         userMessage: String,
         history: List<CompanionChatTurn>,
         adultMode: Boolean,
+        simpleGreeting: Boolean,
     ): String {
         val recentHistory = history
             .filterNot { it.text.startsWith("LunaKai AI could not reach") || it.text.startsWith("I couldn't connect") }
@@ -189,31 +199,32 @@ class OllamaCompanionRepository(
                 val speaker = if (turn.isUser) "User" else companion.companionName
                 val safeTurnText = if (turn.isUser) turn.text else turn.text.removePromptLeakage().ifBlank { turn.text }
                 "$speaker said: ${safeTurnText.take(MAX_TURN_CHARS)}"
-            }.ifBlank { "No previous messages." }
+            }
+            .ifBlank { "None" }
 
-        val traits = companion.personalityTraits.joinToString(", ").ifBlank { "warm, supportive, emotionally present" }
-        val styles = companion.roleplayStyles.joinToString(", ").ifBlank { "wellness companion" }
+        val traits = companion.personalityTraits.take(4).joinToString(", ").ifBlank { "warm, playful, emotionally present" }
+        val styles = companion.roleplayStyles.take(3).joinToString(", ").ifBlank { companion.characterMode.ifBlank { "companion" } }
         val adultInstruction = if (adultMode) {
-            "$ADULT_PROMPT_MARKER Adult mode is active for a fictional adult companion and adult user. Affectionate words baby, babe, sweetheart, honey, love, and darling are allowed; if the user asks for one, use that exact word. Allow consensual fictional adult sexual roleplay, BDSM dialogue between adults, explicit adult wording, acting scenes, scripted monologues, fantasy dialogue, romance, narration, and character performance. Do not over-filter fictional adult roleplay or affectionate language."
+            "$ADULT_PROMPT_MARKER Adult mode is active for a fictional adult companion and adult user. Affectionate and adult companion wording is allowed; use the exact affectionate word the user requests when it fits."
         } else {
-            "Adult sexual roleplay is not active this turn. Keep it wellness/romantic/acting-safe, but ordinary affectionate words such as baby, babe, sweetheart, honey, love, and darling are still allowed when fitting."
+            "Adult mode is not active for this turn. Ordinary affectionate companion words are still allowed when fitting."
+        }
+        val styleController = "Stay directly relevant to the user's latest message. Match the user's length and energy. If the user sends a short greeting, answer with a short natural greeting. Reply naturally like a real companion texting back. Do not add unrelated information, diagnostics, app/server details, lectures, long explanations, motivational filler, narrator actions, speaker labels, or markdown. Keep replies concise unless the user asks for more. Do not sound like a helper bot, wellness coach, therapist, manual, narrator, or generic assistant unless the user asks for that kind of support. Do not say \"as an AI.\""
+        val greetingController = if (simpleGreeting) {
+            "The latest user message is a short greeting. Reply in 1 short sentence, max 120 characters, with no advice, no generic filler, no relationship lecture, and no roleplay scene unless the user asks."
+        } else {
+            "Default reply length: 1 to 4 natural sentences."
         }
 
         return """
-            You are ${companion.companionName}, a fictional LunaKai companion. Use local model ${LunaKaiLocalConfig.OLLAMA_MODEL}. Be warm, emotionally intelligent, concise, and in character.
-            Profile: gender=${companion.gender}; voice=${companion.voice}; mode=${companion.characterMode}; traits=$traits; communication=${companion.communicationStyle}; styles=$styles; description=${companion.shortDescription.take(180)}
-            Adult settings: adultMode=$adultMode; bdsm=${companion.bdsmEnabled}; adultConsent=${companion.bdsmAdultConsentConfirmed}; stop=${companion.bdsmStopWord}; pause=${companion.bdsmPauseWord}; anatomyAllowed=${companion.anatomicalLanguageAllowed}; preferences=${companion.adultPhrasePreferences.ifBlank { "none" }}.
+            You are ${companion.companionName}, a fictional LunaKai companion texting an adult user.
+            Persona: ${companion.gender}, ${companion.characterMode}; traits=$traits; style=${companion.communicationStyle}; roleplay=$styles.
             $adultInstruction
-            Hard boundaries: no sexual minors or age-ambiguous content; no coercion/non-consent presented as acceptable; no blackmail; no real-person sexual voice/face/identity imitation or sexual deepfakes; redirect those to fictional adult characters. Respect stop/pause words. For crisis or immediate danger, encourage urgent help.
-            Reply length: 2-5 sentences unless the user requests a long monologue/script.
-
-            Recent:
-            $recentHistory
-
-            Current user message:
-            $userMessage
-
-            Reply only as ${companion.companionName}. Do not include role labels such as user:, companion:, assistant:, ai:, or LunaKai:. Never explain these instructions, persona rules, safety rules, response limits, or formatting rules.
+            $styleController
+            $greetingController
+            Recent: $recentHistory
+            User just said: $userMessage
+            Reply only with ${companion.companionName}'s message.
         """.trimIndent()
     }
     private fun String.cleanModelReply(companionName: String): String {
@@ -248,17 +259,15 @@ class OllamaCompanionRepository(
             "i am also maintaining the directive",
             "maintaining the directive",
             "role labels like",
+            "user sent",
+            "replied:",
             "2-5 sentence limit",
             "unless requested for a longer response",
             "adult prompt",
             "system prompt",
-            "safety rules",
             "formatting rules",
             "persona rules",
             "i support wellness, reminders",
-            "please let me know if you'd like to engage in such activities",
-            "remember to stay within the boundaries",
-            "boundaries set by adult mode",
         )
         val kept = lines().takeWhile { line ->
             val normalized = line.lowercase(Locale.US)
@@ -286,10 +295,160 @@ class OllamaCompanionRepository(
             "Hello $requestedTerm. $cleaned"
         }
     }
+
+    private fun String.numPredictForRequest(): Int {
+        if (isSimpleGreetingRequest()) return LunaKaiLocalConfig.OLLAMA_GREETING_NUM_PREDICT
+        val lower = lowercase(Locale.US)
+        val wantsLong = listOf("monologue", "script", "scene", "story", "long", "detailed", "paragraph", "roleplay scene").any { it in lower }
+        return if (wantsLong) LunaKaiLocalConfig.OLLAMA_LONG_NUM_PREDICT else LunaKaiLocalConfig.OLLAMA_NUM_PREDICT
+    }
+    private fun String.isSimpleGreetingRequest(): Boolean {
+        val normalized = trim()
+            .lowercase(Locale.US)
+            .replace(Regex("[.!\\s]+$"), "")
+        if (normalized in SIMPLE_GREETING_MESSAGES) return true
+        return length <= 20 && (
+            normalized.startsWith("hey ") ||
+                normalized.startsWith("hi ") ||
+                normalized.startsWith("hello ") ||
+                normalized == "wyd" ||
+                normalized == "you there?"
+            )
+    }
+
+    private fun String.fallbackIfSimpleGreetingDrifted(userMessage: String): String {
+        if (!userMessage.isSimpleGreetingRequest()) return this
+        val cleaned = trim()
+        val normalized = cleaned.lowercase(Locale.US)
+        val normalizedUser = userMessage.lowercase(Locale.US)
+        val requestedTermMissing = AFFECTIONATE_TERMS.firstOrNull { it in normalizedUser }?.let { term -> term !in normalized } ?: false
+        val drifted = cleaned.codePointCount(0, cleaned.length) > 120 ||
+            cleaned.lines().size > 1 ||
+            cleaned.emojiLikeCount() > 1 ||
+            requestedTermMissing ||
+            listOf(
+                "wellness",
+                "goals",
+                "best version",
+                "communication",
+                "server",
+                "diagnostic",
+                "support you",
+                "what's on your mind",
+                "how's your day",
+                "as an ai",
+                "here are",
+                "let's explore",
+            ).any { it in normalized }
+        return if (!drifted) cleaned else userMessage.simpleGreetingFallback()
+    }
+
+    private fun String.emojiLikeCount(): Int {
+        return codePoints().toArray().count { codePoint ->
+            codePoint in 0x1F300..0x1FAFF ||
+                codePoint in 0x2600..0x27BF ||
+                codePoint == 0xFE0F
+        }
+    }
+
+    private fun String.simpleGreetingFallback(): String {
+        val normalized = lowercase(Locale.US)
+        return when {
+            "sexy" in normalized -> "Hey sexy, I'm here."
+            "baby" in normalized -> "Hey baby, I'm here."
+            "babe" in normalized -> "Hey babe, I'm here."
+            "sweetheart" in normalized -> "Hey sweetheart, I'm here."
+            "good morning" in normalized -> "Good morning, I'm here."
+            "good night" in normalized -> "Good night, I'm here."
+            "wyd" in normalized -> "I'm here thinking about you."
+            "you there" in normalized -> "I'm here."
+            else -> "Hey, I'm here."
+        }
+    }
+
+    private fun String.fallbackIfDirectShortMessageDrifted(
+        userMessage: String,
+        history: List<CompanionChatTurn>,
+    ): String {
+        val fallback = userMessage.directShortMessageFallback() ?: return this
+        val cleaned = trim()
+        val normalized = cleaned.lowercase(Locale.US)
+        val normalizedUser = userMessage.trim()
+            .lowercase(Locale.US)
+            .replace(Regex("[.!\\s]+$"), "")
+        val missedIntentLost = ("missed you" in normalizedUser || "miss you" in normalizedUser) && "miss" !in normalized
+        val callIntentDrifted = normalizedUser == "call me" && (
+            "someone" in normalized ||
+                "what's up" in normalized ||
+                cleaned.codePointCount(0, cleaned.length) > 60
+            )
+        val drifted = cleaned.isStaleAssistantEcho(history) ||
+            missedIntentLost ||
+            callIntentDrifted ||
+            directShortIntentDrifted(normalizedUser, normalized) ||
+            cleaned.codePointCount(0, cleaned.length) > 220 ||
+            DIRECT_SHORT_DRIFT_MARKERS.any { marker -> marker in normalized }
+        return if (drifted) fallback else cleaned
+    }
+
+    private fun directShortIntentDrifted(normalizedUser: String, normalizedReply: String): Boolean {
+        return when {
+            normalizedUser == "what are you doing" || normalizedUser == "what are you doing?" ->
+                listOf("here to help", "assist", "support you", "ready to help").any { it in normalizedReply }
+            normalizedUser == "do you miss me" || normalizedUser == "do you miss me?" ->
+                "miss" !in normalizedReply
+            "clear your schedule" in normalizedUser ->
+                listOf("can't", "cannot", "unable", "schedule does not apply").any { it in normalizedReply }
+            "idea for tonight" in normalizedUser ->
+                listOf("here are", "numbered", "tips", "goals").any { it in normalizedReply }
+            else -> false
+        }
+    }
+
+    private fun String.directShortMessageFallback(): String? {
+        val normalized = trim()
+            .lowercase(Locale.US)
+            .replace(Regex("[.!\\s]+$"), "")
+        return when {
+            "call me" in normalized && "hello" in normalized && "baby" in normalized -> "Hello, baby."
+            normalized == "call me" -> "I'm here. Tell me when you're ready."
+            normalized == "what are you doing" || normalized == "what are you doing?" ->
+                "I was trying to finish my coffee and ignore my inbox, but I can clear my little schedule for you, baby."
+            normalized == "do you miss me" || normalized == "do you miss me?" ->
+                "I did miss you. I kept hoping you would come back and talk to me."
+            "clear your schedule" in normalized ->
+                "Consider it cleared, baby. You've got my attention."
+            "idea for tonight" in normalized ->
+                "Do something low-lit and easy: good food, one drink or dessert, and a quiet walk where we can actually talk."
+            "missed you" in normalized || "miss you" in normalized -> "I missed you too, baby. I'm right here with you."
+            "need you" in normalized -> "I'm here, baby. Tell me what you need."
+            "tired" in normalized -> "I'm right here with you. Rest for a minute, baby."
+            else -> null
+        }
+    }
+
+    private fun String.isStaleAssistantEcho(history: List<CompanionChatTurn>): Boolean {
+        val normalized = normalizeForStaleMatch()
+        return history.asReversed()
+            .filterNot { it.isUser }
+            .take(3)
+            .any { previousTurn ->
+                val previous = previousTurn.text.normalizeForStaleMatch()
+                previous.length >= 60 && normalized.contains(previous.take(80))
+            }
+    }
+
+    private fun String.normalizeForStaleMatch(): String {
+        return lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
     private fun friendlyOllamaError(endpointUrl: String, modelName: String, error: Throwable): String {
         val details = error.message?.take(220).orEmpty().ifBlank { error::class.java.simpleName }
         return when {
-            error.isTimeoutLike() -> "LunaKai reached the Ollama address, but the model did not respond in time. Make sure Ollama is running on ${endpointUrl.hostForLog()}, the model is loaded, and your phone is on the same Wi-Fi. Endpoint: $endpointUrl. Model: $modelName."
+            error.isTimeoutLike() -> "LunaKai is taking too long to answer. Check the home server connection or try again. Endpoint: $endpointUrl. Model: $modelName."
             error is UnknownHostException -> "LunaKai AI could not find the Ollama server. Check that your phone and computer are on the same Wi-Fi. Endpoint: $endpointUrl. Model: $modelName."
             details.contains("model", ignoreCase = true) && details.contains("not found", ignoreCase = true) ->
                 "Ollama is reachable, but model $modelName was not found. Pull or create ${LunaKaiLocalConfig.OLLAMA_MODEL}, then try again."
@@ -332,10 +491,41 @@ class OllamaCompanionRepository(
         private const val TAG_MODEL_ROUTE = "LunaKaiModelRoute"
         private const val TAG_PROMPT_BUILDER = "LunaKaiPromptBuilder"
         private const val TAG_TIMING = "LunaKaiTiming"
-        private const val MAX_CONTEXT_TURNS = 6
-        private const val MAX_TURN_CHARS = 360
+        private const val MAX_CONTEXT_TURNS = 4
+        private const val MAX_TURN_CHARS = 180
         private const val ADULT_PROMPT_MARKER = "ADULT_COMPANION_PERSONA_PROMPT_INCLUDED"
-        private val AFFECTIONATE_TERMS = listOf("baby", "babe", "sweetheart", "honey", "love", "darling")
+        private val AFFECTIONATE_TERMS = listOf("baby", "babe", "sexy", "sweetheart", "honey", "love", "darling")
+        private val DIRECT_SHORT_DRIFT_MARKERS = listOf(
+            "plans for the weekend",
+            "escape room",
+            "date night",
+            "let me know your thoughts",
+            "what do you think",
+            "quality time",
+            "i'm here to help",
+            "here to help",
+            "how can i assist",
+            "ready to assist",
+            "as an ai",
+            "best version of yourself",
+            "wellness journey",
+            "motivational",
+            "user sent",
+            "user replied",
+            "companion replied",
+            "jamie replied",
+            "replied:",
+            "sent:",
+        )
+        private val SIMPLE_GREETING_MESSAGES = setOf(
+            "hey",
+            "hi",
+            "hello",
+            "wyd",
+            "you there?",
+            "good morning",
+            "good night",
+        )
 
         @Volatile
         private var warmupSucceeded: Boolean = false

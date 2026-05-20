@@ -28,33 +28,18 @@ object LunaKaiServerConnectionTester {
     suspend fun run(host: String): List<ServerConnectionTestStep> = withContext(Dispatchers.IO) {
         val cleanHost = LunaKaiLocalConfig.normalizeHost(host)
         listOf(
-            test("Ollama", LunaKaiLocalConfig.ollamaBaseUrl(cleanHost)) { body ->
+            test("LunaKai AI Adult host", LunaKaiLocalConfig.ollamaBaseUrl(cleanHost)) { body ->
                 if (!body.contains("Ollama is running", ignoreCase = true)) throw IOException("Unexpected Ollama root response: ${body.take(120)}")
                 "reachable"
             },
-            test("Ollama model", LunaKaiLocalConfig.ollamaTagsEndpoint(cleanHost)) { body ->
+            test("LunaKai AI Adult model", LunaKaiLocalConfig.ollamaTagsEndpoint(cleanHost)) { body ->
                 val models = JSONObject(body).optJSONArray("models")
                 val names = (0 until (models?.length() ?: 0)).mapNotNull { index ->
                     models?.optJSONObject(index)?.optString("name")?.takeIf { it.isNotBlank() }
                 }
                 if (LunaKaiLocalConfig.OLLAMA_MODEL !in names) throw IOException("model not found; available=${names.joinToString(", ").take(220)}")
                 "model found: ${LunaKaiLocalConfig.OLLAMA_MODEL}"
-            },
-            test("Kokoro", LunaKaiLocalConfig.localKokoroHealthUrl(cleanHost)) { body ->
-                val root = JSONObject(body)
-                if (!root.optBoolean("ok", false)) throw IOException(root.optString("status").ifBlank { body.take(160) })
-                "voice server running; pipeline_loaded=${root.optBoolean("pipeline_loaded", false)}"
-            },
-            test("faster-whisper", LunaKaiLocalConfig.localSttHealthUrl(cleanHost)) { body ->
-                val root = JSONObject(body)
-                if (!root.optBoolean("ok", false)) throw IOException(root.optString("status").ifBlank { body.take(160) })
-                "STT server running"
-            },
-            test("Zonos", LunaKaiLocalConfig.localZonosHealthUrl(cleanHost)) { body ->
-                val root = JSONObject(body)
-                if (!root.optBoolean("ok", false)) throw IOException(root.optString("detail").ifBlank { root.optString("status").ifBlank { body.take(160) } })
-                "Zonos server running; status=${root.optString("status", "running")}"
-            },
+            }
         )
     }
 

@@ -278,7 +278,7 @@ class MainActivity : ComponentActivity() {
     private fun migrateLocalAiEndpointPrefs() {
         val host = aiServerHost()
         val endpoint = LunaKaiLocalConfig.ollamaGenerateEndpoint(host)
-        savePref("global_ai_provider", "LunaKai Adult")
+        savePref("global_ai_provider", "LunaKai AI Adult")
         savePref("global_ai_endpoint", endpoint)
         savePref("global_ai_model", LunaKaiLocalConfig.OLLAMA_MODEL)
         Log.i("LunaKaiModelRoute", "migratedLocalEndpointPrefs endpoint=$endpoint model=${LunaKaiLocalConfig.OLLAMA_MODEL} host=$host")
@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity() {
         val host = aiServerHost()
         Log.i(
             "LunaKaiLocalConfig",
-            "startup cleartext=true network=local host=$host base=${LunaKaiLocalConfig.ollamaBaseUrl(host)} generate=${LunaKaiLocalConfig.ollamaGenerateEndpoint(host)} model=${LunaKaiLocalConfig.OLLAMA_MODEL} tags=${LunaKaiLocalConfig.ollamaTagsEndpoint(host)} kokoro=${LunaKaiLocalConfig.localKokoroHealthUrl(host)} stt=${LunaKaiLocalConfig.localSttHealthUrl(host)} zonos=${LunaKaiLocalConfig.localZonosHealthUrl(host)} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
+            "startup cleartext=true network=local host=$host base=${LunaKaiLocalConfig.ollamaBaseUrl(host)} generate=${LunaKaiLocalConfig.ollamaGenerateEndpoint(host)} model=${LunaKaiLocalConfig.OLLAMA_MODEL} liveApi=Gemini geminiModel=${geminiModel()} liveVoice=GeminiPreviewSetupNeeded tags=${LunaKaiLocalConfig.ollamaTagsEndpoint(host)} connectTimeout=${LunaKaiLocalConfig.OLLAMA_CONNECT_TIMEOUT_MS} readTimeout=${LunaKaiLocalConfig.OLLAMA_READ_TIMEOUT_MS} writeTimeout=${LunaKaiLocalConfig.OLLAMA_WRITE_TIMEOUT_MS} callTimeout=${LunaKaiLocalConfig.OLLAMA_CALL_TIMEOUT_MS} keepAlive=${LunaKaiLocalConfig.OLLAMA_KEEP_ALIVE}",
         )
     }
 
@@ -413,20 +413,6 @@ data class BdsmIdentitySettings(
     val adultProviderEnabled: Boolean = false,
     val adultProviderEndpoint: String = "",
     val adultProviderModel: String = "llama-3.1-8b-instruct",
-)
-
-private data class BdsmSessionState(
-    val isActive: Boolean = false,
-    val setupComplete: Boolean = false,
-    val setupStep: Int = 0,
-    val companionRole: String? = null,
-    val userRole: String? = null,
-    val stopWord: String = "Red",
-    val pauseWord: String = "Yellow",
-    val hardLimits: String = "",
-    val softLimits: String = "",
-    val tone: String = "Soft",
-    val aftercarePreference: String = "Soft reassurance",
 )
 
 private fun CompanionProfile.activeRoleplayStyles(): List<String> = roleplayStyles.ifEmpty { listOf(roleplayStyle) }
@@ -581,29 +567,26 @@ fun Context.savePref(key: String, value: String) = lunakaiPrefs().edit().putStri
 fun Context.savePref(key: String, value: Boolean) = lunakaiPrefs().edit().putBoolean(key, value).apply()
 
 private const val KEY_AI_SERVER_HOST = "settings_ai_server_host"
-private const val KEY_LOCAL_VOICE_PROVIDER = "settings_local_voice_provider"
-private val LOCAL_VOICE_PROVIDER_OPTIONS = listOf("Zonos", "Kokoro", "XTTS", "OpenVoice")
-
+private const val KEY_GEMINI_API_KEY = "settings_gemini_api_key"
+private const val KEY_GEMINI_MODEL = "settings_gemini_model"
+private const val KEY_GEMINI_LIVE_AUDIO_MODEL = "settings_gemini_live_audio_model"
 fun Context.aiServerHost(): String = LunaKaiLocalConfig.normalizeHost(
     prefString(KEY_AI_SERVER_HOST, LunaKaiLocalConfig.DEFAULT_SERVER_HOST),
 )
 
-fun Context.localVoiceProviderPreference(): String = prefString(KEY_LOCAL_VOICE_PROVIDER, LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER)
-    .ifBlank { LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER }
+private const val GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI =
+    "Gemini Live Voice setup needed. Live chat is available. Live voice audio is not configured yet. Missing Gemini API key in Settings > AI Provider Settings."
+private const val GEMINI_VOICE_PREVIEW_SETUP_NEEDED_UI =
+    "Gemini Live Voice setup needed. Voice preview uses a fixed Gemini audio sample only after live audio is configured. Missing Gemini API key in Settings > AI Provider Settings."
 
-fun Context.localVoiceProviderLabel(): String = when (localVoiceProviderPreference().lowercase(Locale.US)) {
-    "zonos" -> "Zonos"
-    "xtts" -> "XTTS"
-    "openvoice", "open voice" -> "OpenVoice"
-    else -> "Kokoro"
-}
+fun Context.geminiVoicePreviewStatusLabel(): String = GEMINI_VOICE_PREVIEW_SETUP_NEEDED_UI
+fun Context.geminiApiKey(): String = prefString(KEY_GEMINI_API_KEY, "")
+fun Context.geminiModel(): String = prefString(KEY_GEMINI_MODEL, LunaKaiLocalConfig.GEMINI_DEFAULT_MODEL).ifBlank { LunaKaiLocalConfig.GEMINI_DEFAULT_MODEL }
+fun Context.geminiLiveAudioModel(): String = prefString(KEY_GEMINI_LIVE_AUDIO_MODEL, LunaKaiLocalConfig.GEMINI_DEFAULT_LIVE_AUDIO_MODEL).ifBlank { LunaKaiLocalConfig.GEMINI_DEFAULT_LIVE_AUDIO_MODEL }
 
 fun Context.ollamaGenerateEndpoint(): String = LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost())
 fun Context.ollamaBaseUrl(): String = LunaKaiLocalConfig.ollamaBaseUrl(aiServerHost())
 fun Context.ollamaTagsEndpoint(): String = LunaKaiLocalConfig.ollamaTagsEndpoint(aiServerHost())
-fun Context.localKokoroHealthUrl(): String = LunaKaiLocalConfig.localKokoroHealthUrl(aiServerHost())
-fun Context.localSttHealthUrl(): String = LunaKaiLocalConfig.localSttHealthUrl(aiServerHost())
-fun Context.localZonosHealthUrl(): String = LunaKaiLocalConfig.localZonosHealthUrl(aiServerHost())
 
 private fun Context.adminEmoIntelPrompt(): String {
     val traitNames = listOf(
@@ -624,25 +607,32 @@ private val LUNAKAI_LOCAL_ENDPOINT: String get() = LunaKaiLocalConfig.OLLAMA_GEN
 private val LUNAKAI_LOCAL_MODEL: String get() = LunaKaiLocalConfig.OLLAMA_MODEL
 private val LUNAKAI_ADULT_MODEL: String get() = LunaKaiLocalConfig.OLLAMA_MODEL
 
-private fun providerNameFromEndpoint(endpoint: String): String = "LunaKai Adult"
+private fun providerNameFromEndpoint(endpoint: String): String = "LunaKai AI Adult"
 
 private fun endpointForProvider(provider: String, currentCustom: String = ""): String = LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT
 
 private fun modelForProvider(provider: String): String = LunaKaiLocalConfig.OLLAMA_MODEL
 
-private val DEFAULT_ADMIN_PROVIDER_OPTIONS = listOf("LunaKai Adult")
+private val DEFAULT_ADMIN_PROVIDER_OPTIONS = listOf("LunaKai AI Adult")
 
 private fun parseProviderOptions(raw: String): List<String> =
     raw.split("|")
         .map { it.trim() }
+        .map { provider ->
+            when (provider) {
+                "LunaKai AI", "LunaKai Adult", "Local Ollama", "Ollama" -> "LunaKai AI Adult"
+                else -> provider
+            }
+        }
+        .filter { it == "LunaKai AI Adult" }
         .filter { it.isNotBlank() }
         .distinct()
-        .take(10)
+        .ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
 
 private fun Context.adminProviderOptions(): List<String> = DEFAULT_ADMIN_PROVIDER_OPTIONS
 
 private fun Context.saveAdminProviderOptions(options: List<String>) {
-    savePref("admin_providers", "LunaKai Adult")
+    savePref("admin_providers", "LunaKai AI Adult")
 }
 
 private const val DEFAULT_CALL_ANSWER_PHRASES = "Hello"
@@ -2220,61 +2210,6 @@ private fun calculateCompanionExperience(
     )
 }
 
-private fun userMessageMentionsBdsm(message: String): Boolean {
-    val normalized = message.lowercase()
-    return listOf(
-        "bdsm",
-        "dominance",
-        "submission",
-        "dominant",
-        "submissive",
-        "safeword",
-        "safe word",
-        "scene",
-        "roleplay",
-        "fantasy",
-        "dom",
-        "sub",
-    ).any { it in normalized }
-}
-
-private fun nextBdsmSetupResponse(
-    companion: CompanionProfile,
-    currentState: BdsmSessionState,
-    userMessage: String,
-): Pair<String, BdsmSessionState>? {
-    val settings = companion.bdsmIdentitySettings
-    if (!settings.enabled || !settings.adultConsentConfirmed) return null
-    val message = userMessage.trim()
-    val lower = message.lowercase()
-    val stopWord = currentState.stopWord.ifBlank { settings.defaultStopWord }
-    val pauseWord = currentState.pauseWord.ifBlank { settings.defaultPauseWord }
-
-    if (currentState.isActive && stopWord.isNotBlank() && lower.contains(stopWord.lowercase())) {
-        return "I'm stopping now. You're safe here. Do you want grounding, reassurance, or to return to regular chat?" to
-            currentState.copy(isActive = false, setupComplete = false, setupStep = 0)
-    }
-    if (currentState.isActive && pauseWord.isNotBlank() && lower.contains(pauseWord.lowercase())) {
-        return "Paused. Do you want me to soften the tone, change the scene, or stop completely?" to currentState
-    }
-
-    val shouldHandleSetup = !currentState.setupComplete && (currentState.isActive || userMessageMentionsBdsm(message))
-    if (!shouldHandleSetup) return null
-
-    return when (currentState.setupStep) {
-        0 -> "We can explore that in a consent-based way. Before we start, what role would you like me to play, and what role would you like to play?" to
-            currentState.copy(isActive = true, setupStep = 1)
-        1 -> "What are your hard limits and soft limits for this scene?" to
-            currentState.copy(companionRole = message, userRole = "User-defined", setupStep = 2)
-        2 -> "Do you want to use ${settings.defaultStopWord} as the stop word and ${settings.defaultPauseWord} as the pause word, or would you like to choose your own?" to
-            currentState.copy(hardLimits = message, setupStep = 3)
-        3 -> "What tone do you want me to use: soft, playful, firm, nurturing, or intense but safe?" to
-            currentState.copy(stopWord = settings.defaultStopWord, pauseWord = settings.defaultPauseWord, setupStep = 4)
-        else -> "Got it. I'll stay within those boundaries. You can pause with ${currentState.pauseWord} or stop completely with ${currentState.stopWord} at any time. What opening direction feels right?" to
-            currentState.copy(tone = message, setupComplete = true, isActive = true, setupStep = 5)
-    }
-}
-
 @Composable
 private fun SplashScreen() {
     GradientBackground {
@@ -2757,17 +2692,20 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
         calculateCompanionExperience(companion)
     }
     val context = LocalContext.current
-    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
+    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai AI Adult")
     val globalAiEndpoint = context.ollamaGenerateEndpoint()
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
     val adminEmoIntelProfile = context.adminEmoIntelPrompt()
+    val geminiApiKey = context.geminiApiKey()
+    val geminiModel = context.geminiModel()
+    val geminiLiveAudioModel = context.geminiLiveAudioModel()
     val adultProviderActive = companion.isAdultRoleplayEnabled() &&
         companion.bdsmIdentitySettings.adultConsentConfirmed &&
         companion.bdsmIdentitySettings.adultProviderEnabled
     val effectiveProviderEnabled = true
     val effectiveEndpoint = context.ollamaGenerateEndpoint()
     val effectiveModel = LUNAKAI_LOCAL_MODEL
-    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), context.localVoiceProviderPreference()) {
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), geminiApiKey, geminiModel, geminiLiveAudioModel) {
         CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2790,7 +2728,9 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
             adultProviderModel = effectiveModel,
             adminEmoIntelProfile = adminEmoIntelProfile,
             serverHost = context.aiServerHost(),
-            localVoiceProviderId = context.localVoiceProviderPreference(),
+            geminiApiKey = geminiApiKey,
+            geminiModel = geminiModel,
+            geminiLiveAudioModel = geminiLiveAudioModel,
         )
     }
     LaunchedEffect(companion.id) { chatViewModel.loadMessages(companion.id) }
@@ -2809,7 +2749,6 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
         delay(80)
         chatScrollState.animateScrollTo(chatScrollState.maxValue)
     }
-    var bdsmSessionState by remember(companion.id) { mutableStateOf(BdsmSessionState()) }
 
     GradientBackground {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
@@ -2857,15 +2796,8 @@ private fun CompanionChatScreen(companion: CompanionProfile, chatStorage: ChatSt
                         if (input.isNotBlank() && !isTyping) {
                             val userText = input.trim()
                             val history = visibleMessages.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
-                            val bdsmSetupResponse = nextBdsmSetupResponse(companion, bdsmSessionState, userText)
                             input = ""
-                            if (bdsmSetupResponse != null) {
-                                val (reply, nextState) = bdsmSetupResponse
-                                bdsmSessionState = nextState
-                                chatViewModel.sendPreparedReply(companion, userText, reply, ChatMessage.MODE_TEXT)
-                            } else {
-                                chatViewModel.sendMessage(companion, companionContext, userText, history, ChatMessage.MODE_TEXT)
-                            }
+                            chatViewModel.sendMessage(companion, companionContext, userText, history, ChatMessage.MODE_TEXT)
                         }
                     }
                 }
@@ -2886,7 +2818,7 @@ private fun LiveCompanionCallScreen(
                 companionPhotoUri = companion.photoUri,
                 avatarType = companion.avatarType,
                 callStatus = "Ready to connect",
-                currentCaption = "I'm listening. Tell me what's been sitting on your heart.",
+                currentCaption = GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI,
             ),
         )
     }
@@ -2933,17 +2865,20 @@ private fun LiveCompanionCallScreen(
     val callRingtoneChoice = context.prefString(voiceSettingKey(companion.id, "ringtoneChoice"), CALL_RINGTONE_OPTIONS.first())
     val callRingtoneUri = context.prefString(voiceSettingKey(companion.id, "ringtoneUri"), "")
     val callUrgency = context.prefString(voiceSettingKey(companion.id, "answerUrgency"), CALL_URGENCY_OPTIONS.first())
-    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai Adult")
+    val globalAiProvider = context.prefString("global_ai_provider", "LunaKai AI Adult")
     val globalAiEndpoint = context.ollamaGenerateEndpoint()
     val globalAiModel = context.prefString("global_ai_model", modelForProvider(globalAiProvider)).ifBlank { LUNAKAI_LOCAL_MODEL }
     val adminEmoIntelProfile = context.adminEmoIntelPrompt()
+    val geminiApiKey = context.geminiApiKey()
+    val geminiModel = context.geminiModel()
+    val geminiLiveAudioModel = context.geminiLiveAudioModel()
     val adultProviderActive = companion.isAdultRoleplayEnabled() &&
         companion.bdsmIdentitySettings.adultConsentConfirmed &&
         companion.bdsmIdentitySettings.adultProviderEnabled
     val effectiveProviderEnabled = true
     val effectiveEndpoint = context.ollamaGenerateEndpoint()
     val effectiveModel = LUNAKAI_LOCAL_MODEL
-    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), context.localVoiceProviderPreference()) {
+    val companionContext = remember(companion, globalAiProvider, globalAiEndpoint, globalAiModel, adminEmoIntelProfile, context.aiServerHost(), geminiApiKey, geminiModel, geminiLiveAudioModel) {
         CompanionContext(
             companionId = companion.id,
             companionName = companion.name,
@@ -2966,22 +2901,42 @@ private fun LiveCompanionCallScreen(
             adultProviderModel = effectiveModel,
             adminEmoIntelProfile = adminEmoIntelProfile,
             serverHost = context.aiServerHost(),
-            localVoiceProviderId = context.localVoiceProviderPreference(),
+            geminiApiKey = geminiApiKey,
+            geminiModel = geminiModel,
+            geminiLiveAudioModel = geminiLiveAudioModel,
         )
     }
     var liveSessionState by remember { mutableStateOf<LocalLiveSessionState>(LocalLiveSessionState.Idle) }
+    val geminiKeyConfigured = companionContext.geminiApiKey.isNotBlank()
+    val liveAudioImplemented = geminiKeyConfigured
     var speechTurnInProgress by remember { mutableStateOf(false) }
+    var isRecordingSpeechTurn by remember { mutableStateOf(false) }
     var cameraEnabled by remember { mutableStateOf(false) }
     var pendingLiveMode by remember { mutableStateOf<LiveMode?>(null) }
     var pendingAnswerPhrase by remember { mutableStateOf<String?>(null) }
     var permissionMessage by remember { mutableStateOf<String?>(null) }
     fun applyLivePhase(phase: LiveCallPhase, message: String) {
         state = when (phase) {
-            LiveCallPhase.Listening -> state.copy(callStatus = "Listening...", isMicOn = true, isUserSpeaking = true, isCompanionSpeaking = false, currentCaption = "Listening... Tap Mic again to interrupt or speak after the current turn.")
-            LiveCallPhase.ProcessingSpeech -> state.copy(callStatus = "Processing speech...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = "Transcribing your voice locally with faster-whisper...")
-            LiveCallPhase.GeneratingReply -> state.copy(callStatus = "Thinking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = "LunaKai is thinking through your turn...")
-            LiveCallPhase.GeneratingVoice -> state.copy(callStatus = message, isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = message)
-            LiveCallPhase.Speaking -> state.copy(callStatus = "Speaking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = true, currentCaption = state.currentCaption)
+            LiveCallPhase.Listening -> {
+                isRecordingSpeechTurn = true
+                state.copy(callStatus = "Listening...", isMicOn = true, isUserSpeaking = true, isCompanionSpeaking = false, currentCaption = "Listening... Tap Mic again to stop recording.")
+            }
+            LiveCallPhase.ProcessingSpeech -> {
+                isRecordingSpeechTurn = false
+                state.copy(callStatus = "Processing speech...", isMicOn = false, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = message)
+            }
+            LiveCallPhase.GeneratingReply -> {
+                isRecordingSpeechTurn = false
+                state.copy(callStatus = "Thinking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = "Gemini is thinking through your turn...")
+            }
+            LiveCallPhase.GeneratingVoice -> {
+                isRecordingSpeechTurn = false
+                state.copy(callStatus = message, isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = false, currentCaption = message)
+            }
+            LiveCallPhase.Speaking -> {
+                isRecordingSpeechTurn = false
+                state.copy(callStatus = "Speaking...", isMicOn = true, isUserSpeaking = false, isCompanionSpeaking = true, currentCaption = message)
+            }
             else -> state.copy(callStatus = message, currentCaption = message)
         }
     }
@@ -2993,11 +2948,11 @@ private fun LiveCompanionCallScreen(
         val answerCaption = answerPhrase?.takeIf { it.isNotBlank() }?.let { "${companion.name}: $it" }
         state = state.copy(
             selectedMode = mode,
-            isMicOn = true,
-            isUserSpeaking = true,
+            isMicOn = false,
+            isUserSpeaking = false,
             isCompanionSpeaking = false,
-            callStatus = "Warming up LunaKai voice...",
-            currentCaption = answerCaption ?: "Warming up LunaKai voice. When it is ready, tap Mic and speak naturally to ${companion.name}.",
+            callStatus = "Connecting Gemini Live Companion...",
+            currentCaption = answerCaption ?: "Connecting to Gemini Live Companion. Type in the live chat for Gemini replies.",
         )
         cameraEnabled = false
         liveSessionState = LocalLiveSessionState.Connecting
@@ -3009,14 +2964,14 @@ private fun LiveCompanionCallScreen(
                 LocalLiveSessionState.Idle,
                 LocalLiveSessionState.Connecting -> state
                 is LocalLiveSessionState.Connected -> state.copy(
-                    callStatus = if (result.voiceSetupMessage == null) "Voice connected" else "Voice setup needs attention",
-                    isMicOn = true,
-                    isUserSpeaking = true,
+                    callStatus = if (result.voiceSetupMessage == null) "Listening" else "Gemini Live Voice setup needed",
+                    isMicOn = false,
+                    isUserSpeaking = false,
                     isCompanionSpeaking = false,
-                    currentCaption = result.voiceSetupMessage ?: answerCaption ?: "${companion.name} can hear you now. Tap Mic when you're ready to speak.",
+                    currentCaption = result.voiceSetupMessage ?: result.message,
                 )
                 is LocalLiveSessionState.Error -> state.copy(
-                    callStatus = "Voice setup needs attention",
+                    callStatus = "Gemini setup needs attention",
                     isMicOn = false,
                     isUserSpeaking = false,
                     currentCaption = result.message,
@@ -3092,16 +3047,73 @@ private fun LiveCompanionCallScreen(
         }
     }
     fun requestOrStartLocalLive(mode: LiveMode, answerPhrase: String? = null) {
-        val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
-        val missing = requiredPermissions.filterNot { context.hasPermission(it) }
-        if (missing.isNotEmpty()) {
+        permissionMessage = null
+        if (mode == LiveMode.VOICE && !context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
             pendingLiveMode = mode
             pendingAnswerPhrase = answerPhrase
-            permissionMessage = "Allow microphone access to start ${companion.name}."
-            livePermissionLauncher.launch(missing.toTypedArray())
+            livePermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
         } else {
-            permissionMessage = null
             startLocalLive(mode, answerPhrase)
+        }
+    }
+
+    fun submitLiveTranscript(transcript: String, mode: String = ChatMessage.MODE_CALL) {
+        val cleanedTranscript = transcript.trim()
+        if (cleanedTranscript.isBlank() || speechTurnInProgress) return
+        speechTurnInProgress = true
+        isRecordingSpeechTurn = false
+        state = state.copy(
+            callStatus = "Thinking...",
+            isMicOn = false,
+            isUserSpeaking = false,
+            isCompanionSpeaking = false,
+            currentCaption = cleanedTranscript,
+        )
+        Log.i("LunaKaiGeminiLive", "liveTextSubmit liveApi=Gemini transcriptLength=${cleanedTranscript.length} normalChatProviderUsed=false lunaKaiAiAdultUsed=false androidTtsUsed=false androidSpeechUsed=false")
+        chatViewModel.addUserTranscript(companion, cleanedTranscript, mode)
+        scope.launch {
+            try {
+                val history = visibleLiveMessages
+                    .filter { it.sender != ChatMessage.SENDER_SYSTEM }
+                    .takeLast(6)
+                    .map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
+                val result = liveRepository.submitTextTurn(
+                    context = context,
+                    companion = companionContext,
+                    transcript = cleanedTranscript,
+                    history = history,
+                    onPhase = { phase, message -> scope.launch { applyLivePhase(phase, message) } },
+                )
+                if (result.reply.isNotBlank()) {
+                    chatViewModel.addCompanionTranscript(companion, result.reply, mode)
+                }
+                state = when {
+                    result.errorMessage != null -> state.copy(
+                        callStatus = "Gemini setup needed",
+                        isMicOn = false,
+                        isUserSpeaking = false,
+                        isCompanionSpeaking = false,
+                        currentCaption = result.errorMessage,
+                    )
+                    result.voiceErrorMessage != null -> state.copy(
+                        callStatus = "Ready / Type to Talk",
+                        isMicOn = false,
+                        isUserSpeaking = false,
+                        isCompanionSpeaking = false,
+                        currentCaption = result.voiceErrorMessage,
+                    )
+                    else -> state.copy(
+                        callStatus = "Ready / Type to Talk",
+                        isMicOn = false,
+                        isUserSpeaking = false,
+                        isCompanionSpeaking = false,
+                        currentCaption = "${companion.name}: ${result.reply}",
+                    )
+                }
+            } finally {
+                speechTurnInProgress = false
+                isRecordingSpeechTurn = false
+            }
         }
     }
 
@@ -3111,66 +3123,86 @@ private fun LiveCompanionCallScreen(
             return
         }
         if (speechTurnInProgress) {
-            Log.i("LunaKaiLocalSTT", "pushToTalkIgnored turnInProgress=true")
-            state = state.copy(
-                callStatus = "Processing speech...",
-                isMicOn = true,
-                isUserSpeaking = false,
-                isCompanionSpeaking = false,
-                currentCaption = "Already processing your voice turn. Wait for LunaKai to answer before tapping Mic again.",
-            )
-            return
-        }
-        speechTurnInProgress = true
-        state = state.copy(
-            callStatus = "Listening...",
-            isMicOn = true,
-            isUserSpeaking = true,
-            isCompanionSpeaking = false,
-            currentCaption = "Listening for your voice. Pause when you're done so LunaKai can answer.",
-        )
-        scope.launch {
-            try {
+            if (isRecordingSpeechTurn) {
+                Log.i("LunaKaiGeminiLive", "voiceButtonStopRequested turnInProgress=true")
+                liveRepository.requestStopRecording()
                 state = state.copy(
                     callStatus = "Processing speech...",
                     isMicOn = true,
                     isUserSpeaking = false,
                     isCompanionSpeaking = false,
-                    currentCaption = "Transcribing your voice locally with faster-whisper...",
+                    currentCaption = GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI,
                 )
+            } else {
+                Log.i("LunaKaiGeminiLive", "voiceButtonIgnored turnInProgress=true recording=false")
+                state = state.copy(
+                    callStatus = "Processing speech...",
+                    isMicOn = true,
+                    isUserSpeaking = false,
+                    isCompanionSpeaking = false,
+                    currentCaption = "Already processing your voice turn. Wait for ${companion.name} to answer before tapping Mic again.",
+                )
+            }
+            return
+        }
+        speechTurnInProgress = true
+        isRecordingSpeechTurn = true
+        state = state.copy(
+            callStatus = "Listening...",
+            isMicOn = true,
+            isUserSpeaking = true,
+            isCompanionSpeaking = false,
+            currentCaption = "Gemini Live Voice is listening. Speak naturally; ${companion.name} will answer with audio.",
+        )
+        scope.launch {
+            val transcriptAdded = java.util.concurrent.atomic.AtomicBoolean(false)
+            try {
                 val history = visibleLiveMessages
                     .filter { it.sender != ChatMessage.SENDER_SYSTEM }
                     .takeLast(4)
                     .map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
-                val result = liveRepository.captureUserSpeechTurn(context, companionContext, history) { phase, message -> scope.launch { applyLivePhase(phase, message) } }
-                if (result.transcript.isNotBlank() && result.reply.isNotBlank()) {
-                    chatViewModel.sendPreparedReply(companion, result.transcript, result.reply, ChatMessage.MODE_CALL)
+                val result = liveRepository.captureUserSpeechTurn(
+                    context = context,
+                    companion = companionContext,
+                    history = history,
+                    onPhase = { phase, message -> scope.launch { applyLivePhase(phase, message) } },
+                    onTranscript = { transcript ->
+                        transcriptAdded.set(true)
+                        scope.launch { chatViewModel.addUserTranscript(companion, transcript, ChatMessage.MODE_CALL) }
+                    },
+                )
+                if (result.reply.isNotBlank()) {
+                    if (result.transcript.isNotBlank() && !transcriptAdded.get()) {
+                        chatViewModel.addUserTranscript(companion, result.transcript, ChatMessage.MODE_CALL)
+                    }
+                    chatViewModel.addCompanionTranscript(companion, result.reply, ChatMessage.MODE_CALL)
                 }
                 state = when {
                     result.errorMessage != null -> state.copy(
-                        callStatus = "Voice turn needs attention",
-                        isMicOn = true,
+                        callStatus = "Gemini setup needed",
+                        isMicOn = false,
                         isUserSpeaking = false,
                         isCompanionSpeaking = false,
                         currentCaption = result.errorMessage,
                     )
                     result.voiceErrorMessage != null -> state.copy(
-                        callStatus = "Voice setup needs attention",
-                        isMicOn = true,
-                        isUserSpeaking = true,
+                        callStatus = "Ready / Type to Talk",
+                        isMicOn = false,
+                        isUserSpeaking = false,
                         isCompanionSpeaking = false,
                         currentCaption = result.voiceErrorMessage,
                     )
                     else -> state.copy(
-                        callStatus = "Listening...",
-                        isMicOn = true,
-                        isUserSpeaking = true,
+                        callStatus = "Ready / Type to Talk",
+                        isMicOn = false,
+                        isUserSpeaking = false,
                         isCompanionSpeaking = false,
                         currentCaption = "${companion.name}: ${result.reply}",
                     )
                 }
             } finally {
                 speechTurnInProgress = false
+                isRecordingSpeechTurn = false
             }
         }
     }
@@ -3191,20 +3223,14 @@ private fun LiveCompanionCallScreen(
             val ringPlayer = startCallRingPlayer(context, callRingtoneChoice, callRingtoneUri)
             delay(ringDuration)
             stopCallRingPlayer(ringPlayer)
-            val shouldSpeakAnswer = callAnswerStyle != "Answer with text only"
-            val shouldShowAnswerText = callAnswerStyle != "Answer with voice only"
             state = state.copy(
                 callStatus = "${companion.name} answered",
-                isCompanionSpeaking = shouldSpeakAnswer,
-                currentCaption = if (shouldShowAnswerText) {
-                    "${companion.name}: $answerPhrase"
-                } else {
-                    "${companion.name} answered. Listen for the voice greeting."
-                },
+                isCompanionSpeaking = false,
+                currentCaption = "${companion.name}: $answerPhrase",
             )
             requestOrStartLocalLive(
                 LiveMode.VOICE,
-                answerPhrase.takeIf { shouldSpeakAnswer },
+                answerPhrase,
             )
         }
     }
@@ -3213,6 +3239,7 @@ private fun LiveCompanionCallScreen(
             liveRepository.stopAudioConversation()
             liveSessionState = LocalLiveSessionState.Idle
             speechTurnInProgress = false
+            isRecordingSpeechTurn = false
             cameraEnabled = false
             state = state.copy(
                 isMicOn = false,
@@ -3233,6 +3260,7 @@ private fun LiveCompanionCallScreen(
     LaunchedEffect(state.isMicOn, state.selectedMode, state.callStatus) {
         if (
             state.isMicOn &&
+            !speechTurnInProgress &&
             !state.callStatus.contains("attention", ignoreCase = true) &&
             !state.currentCaption.startsWith("${companion.name}:")
         ) {
@@ -3250,7 +3278,7 @@ private fun LiveCompanionCallScreen(
             ScreenScroll {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("${companion.name} is here with you", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    SoftStatusChip("Live - emotionally present", SuccessGreen)
+                    SoftStatusChip(if (geminiKeyConfigured) "Gemini Live Voice" else "Gemini setup", if (geminiKeyConfigured) SuccessGreen else WarningPeach)
                 }
 
                 Box(
@@ -3310,7 +3338,7 @@ private fun LiveCompanionCallScreen(
                 }
 
                 val liveInstruction = if (state.callStatus == "Ready to connect") {
-                    "Tap Call to ring ${companion.name}. When they answer, speak naturally like a real call with a buddy, lover, or friend."
+                    GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI
                 } else {
                     state.currentCaption
                 }
@@ -3325,11 +3353,12 @@ private fun LiveCompanionCallScreen(
 
                 GlassCard {
                     Text("Call Controls", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(if (geminiKeyConfigured) "Gemini Live Voice uses ${companionContext.geminiLiveAudioModel}. Speaker output follows the device/Bluetooth route." else GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        CallControlButton("Call", R.drawable.ic_call_end, state.isMicOn, SuccessGreen) {
+                        CallControlButton("Call", R.drawable.ic_call_end, false, SuccessGreen, enabled = liveAudioImplemented) {
                             ringCompanionThenStartCall()
                         }
-                        CallControlButton("Mic", R.drawable.ic_mic, state.isMicOn, RosePink.copy(alpha = 0.18f + micGlow * 0.42f)) {
+                        CallControlButton("Mic", R.drawable.ic_mic, false, RosePink.copy(alpha = 0.18f + micGlow * 0.42f), enabled = liveAudioImplemented) {
                             if (state.isCompanionSpeaking) {
                                 liveRepository.interruptCompanionSpeech()
                                 state = state.copy(
@@ -3342,7 +3371,7 @@ private fun LiveCompanionCallScreen(
                                 captureLiveSpeechTurn()
                             }
                         }
-                        CallControlButton("Speaker", R.drawable.ic_speaker, state.isSpeakerOn, CalmBlue) {
+                        CallControlButton("Speaker", R.drawable.ic_speaker, false, CalmBlue, enabled = false) {
                             state = state.copy(isSpeakerOn = !state.isSpeakerOn)
                         }
                         CallControlButton("Photo", R.drawable.ic_capture, showCaptureSheet, SuccessGreen) { showCaptureSheet = true }
@@ -3351,6 +3380,11 @@ private fun LiveCompanionCallScreen(
                             showEndCallPrompt = true
                         }
                     }
+                    SecondarySoftButton(
+                        "Type to Gemini",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showTextChat = true },
+                    )
                 }
             }
 
@@ -3445,15 +3479,13 @@ private fun LiveCompanionCallScreen(
                                 "Send",
                                 modifier = Modifier.weight(1f),
                                 onClick = {
-                                    if (textInput.isNotBlank() && !liveIsTyping) {
+                                    if (textInput.isNotBlank() && !speechTurnInProgress) {
                                         val userText = textInput.trim()
                                         val mode = when (state.selectedMode) {
                                             LiveMode.VOICE -> ChatMessage.MODE_CALL
                                             LiveMode.TEXT -> ChatMessage.MODE_TEXT
                                         }
-                                        val history = visibleLiveMessages.takeLast(6).map { CompanionChatTurn(text = it.text, isUser = it.isUser) }
-                                        chatViewModel.sendMessage(companion, companionContext, userText, history, mode)
-                                        state = state.copy(currentCaption = userText, isUserSpeaking = true, isCompanionSpeaking = false)
+                                        submitLiveTranscript(userText, mode)
                                         textInput = ""
                                     }},
                             )
@@ -3467,30 +3499,50 @@ private fun LiveCompanionCallScreen(
 }
 
 @Composable
-private fun CallControlButton(label: String, iconResId: Int, active: Boolean, color: Color, onClick: () -> Unit) {
+private fun CallControlButton(
+    label: String,
+    iconResId: Int,
+    active: Boolean,
+    color: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(
             modifier = Modifier
                 .size(54.dp)
-                .shadow(if (active || label == "End") 14.dp else 6.dp, CircleShape)
+                .shadow(if (enabled && (active || label == "End")) 14.dp else 6.dp, CircleShape)
                 .clip(CircleShape)
-                .background(if (label == "End") WarningPeach.copy(alpha = 0.86f) else CardAccent.copy(alpha = 0.92f))
+                .background(when {
+                    label == "End" -> WarningPeach.copy(alpha = 0.86f)
+                    !enabled -> CardAccent.copy(alpha = 0.38f)
+                    else -> CardAccent.copy(alpha = 0.92f)
+                })
                 .border(
                     1.dp,
-                    if (active) color.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.18f),
+                    when {
+                        !enabled -> Color.White.copy(alpha = 0.08f)
+                        active -> color.copy(alpha = 0.90f)
+                        else -> Color.White.copy(alpha = 0.18f)
+                    },
                     CircleShape,
                 )
-                .clickable(onClick = hapticAction(onClick)),
+                .clickable(enabled = enabled, onClick = hapticAction(onClick)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(iconResId),
                 contentDescription = label,
-                tint = if (label == "End") Color.White else if (active) Color.White else TextSecondary,
+                tint = when {
+                    !enabled -> TextMuted.copy(alpha = 0.42f)
+                    label == "End" -> Color.White
+                    active -> Color.White
+                    else -> TextSecondary
+                },
                 modifier = Modifier.size(25.dp),
             )
         }
-        Text(label, color = TextMuted, fontSize = 10.sp, maxLines = 1)
+        Text(label, color = if (enabled) TextMuted else TextMuted.copy(alpha = 0.52f), fontSize = 10.sp, maxLines = 1)
     }
 }
 
@@ -3580,7 +3632,7 @@ private fun CameraPreviewPanel(
     GlassCard(background = CardDark.copy(alpha = 0.94f)) {
         Text("Video Preview", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text(
-            "Use this to test the camera preview for a future local avatar pipeline. Live voice uses local providers only.",
+            "Use this to test the camera preview for a future avatar pipeline. Live voice/audio uses Gemini Live when configured; Gemini live text remains available separately.",
             color = TextMuted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
@@ -3726,7 +3778,7 @@ private fun LiveCompanionScreen(companion: CompanionProfile, onNavigate: (AppRou
                     SoftStatusChip("Ready to connect", SuccessGreen)
                     Text(companion.voice, color = TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
                     Text(
-                        "Text, talk, or sit with your companion in a premium live space. Voice Chat connects through your selected LunaKai AI provider.",
+                        "Text, talk, or sit with your companion in a premium live space. Voice Chat connects through Gemini Live Companion.",
                         color = TextMuted,
                         textAlign = TextAlign.Center,
                         lineHeight = 21.sp,
@@ -4370,7 +4422,7 @@ private fun RoleplayDetails(
             var showAdultPhraseSetup by remember { mutableStateOf(false) }
             GlassCard(background = WarningPeach.copy(alpha = 0.18f), padding = 14.dp) {
                 Text("RolePlay Mode Enabled", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("This companion can support consenting fictional adult roleplay through the local LunaKai Adult Ollama model. Boundaries, roles, and safewords stay tied to this companion.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
+                Text("This companion can support consenting fictional adult roleplay through the local LunaKai AI Adult Ollama model. Boundaries, roles, and safewords stay tied to this companion.", color = TextMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
             RoundedInputField(boundaries, onBoundariesChange, "What is your Fantasy?", minLines = 3)
             ToggleRow("I understand this mode is for consenting adults only.", bdsmIdentitySettings.adultConsentConfirmed, onBdsmConsentChange)
@@ -4401,16 +4453,16 @@ private fun RoleplayDetails(
                 )
             }
             HorizontalDivider(color = TextMuted.copy(alpha = 0.18f))
-            ToggleRow("Use LunaKai Adult local model", true) {
+            ToggleRow("Use LunaKai AI Adult local model", true) {
                 onAdultProviderEnabledChange(true)
                 onAdultProviderEndpointChange(LUNAKAI_LOCAL_ENDPOINT)
                 onAdultProviderModelChange(LUNAKAI_ADULT_MODEL)
             }
             Text("Adult-mode messages route through the local Ollama endpoint and model saved in LunaKai local config. No cloud API key is used.", color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp)
-            MiniStateCard("Provider", "LunaKai Adult local")
+            MiniStateCard("Provider", "LunaKai AI Adult local")
             MiniStateCard("Endpoint", LUNAKAI_LOCAL_ENDPOINT)
             MiniStateCard("Model", LUNAKAI_ADULT_MODEL)
-            MiniStateCard("Safety filter", "Blocks minors, non-consent, blackmail, real-person sexual impersonation, illegal content, and real harm before model calls")
+            MiniStateCard("App cleanup", "Removes raw labels, markdown, debug text, and duplicate prompt leakage. Provider/model rules handle content.")
             MiniStateCard("Default stop word", bdsmIdentitySettings.defaultStopWord)
             MiniStateCard("Default pause word", bdsmIdentitySettings.defaultPauseWord)
         }
@@ -5160,7 +5212,6 @@ private fun ActiveCompanionSettingsScreen(
     var traitLimitMessage by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     var imageMessage by remember { mutableStateOf<String?>(null) }
-    var localVoiceProvider by remember { mutableStateOf(context.localVoiceProviderLabel()) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) {
             imageMessage = "Image selection canceled."
@@ -5222,16 +5273,8 @@ private fun ActiveCompanionSettingsScreen(
             ) {
                 SoftDropdown("Voice settings", companion.voice.ifBlank { allowedVoiceOptions.first() }, allowedVoiceOptions) { voice -> onCompanionChange(companion.copy(voice = voice)) }
                 MiniStateCard("Selected sound", voicePreviewDescription(companion.voice.ifBlank { allowedVoiceOptions.first() }))
-                SoftDropdown(
-                    label = "Local voice provider",
-                    selected = localVoiceProvider,
-                    options = LOCAL_VOICE_PROVIDER_OPTIONS,
-                    onSelected = { provider ->
-                        localVoiceProvider = provider
-                        context.savePref(KEY_LOCAL_VOICE_PROVIDER, provider.lowercase(Locale.US))
-                    },
-                )
-                Text("Use this dropdown to choose the companion voice. Zonos is the expressive local target when available; Kokoro remains the stable fallback.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                MiniStateCard("Live voice/audio", LocalContext.current.geminiLiveAudioModel())
+                Text("Only two active providers are shown here: LunaKai AI Adult for normal chat and Gemini for Live Companion.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 CharacterModeGrid(characterModes, companion.characterMode) { mode -> onCompanionChange(companion.copy(characterMode = mode)) }
             }
 
@@ -5421,9 +5464,12 @@ private fun PreferencesScreen(
     var companionNotificationsEnabled by remember { mutableStateOf(context.prefBoolean("settings_companion_notifications_enabled", true)) }
     var notificationStyle by remember { mutableStateOf(context.prefString("settings_notification_style", "Calculated from character preferences")) }
     var notificationUrgency by remember { mutableStateOf(context.prefString("settings_notification_urgency", "Calculated from character preferences")) }
-    var globalAiProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
+    var globalAiProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai AI Adult")) }
     var globalAiEndpoint by remember { mutableStateOf(context.ollamaGenerateEndpoint()) }
     var globalAiModel by remember { mutableStateOf(context.prefString("global_ai_model", LUNAKAI_LOCAL_MODEL)) }
+    var geminiApiKey by remember { mutableStateOf(context.geminiApiKey()) }
+    var geminiModel by remember { mutableStateOf(context.geminiModel()) }
+    var geminiLiveAudioModel by remember { mutableStateOf(context.geminiLiveAudioModel()) }
     var adminProviderOptionsRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
     val allowedAiProviders = parseProviderOptions(adminProviderOptionsRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
     var showProviderDialog by remember { mutableStateOf(false) }
@@ -5433,7 +5479,6 @@ private fun PreferencesScreen(
     val settingsScope = rememberCoroutineScope()
     var aiServerHost by remember { mutableStateOf(context.aiServerHost()) }
     var serverPreset by remember { mutableStateOf("Home Wi-Fi") }
-    var localVoiceProvider by remember { mutableStateOf(context.localVoiceProviderLabel()) }
     var serverConnectionSummary by remember { mutableStateOf("Not tested yet.") }
     var serverConnectionRunning by remember { mutableStateOf(false) }
     var ollamaDiagnosticSummary by remember { mutableStateOf(context.prefString("ollama_diagnostic_summary", "Not run yet.")) }
@@ -5474,6 +5519,9 @@ private fun PreferencesScreen(
         globalAiProvider,
         globalAiEndpoint,
         globalAiModel,
+        geminiApiKey,
+        geminiModel,
+        geminiLiveAudioModel,
     ) {
         context.savePref("settings_voice_journal_enabled", voiceJournalEnabled)
         context.savePref("settings_memory_enabled", memoryEnabled)
@@ -5495,8 +5543,10 @@ private fun PreferencesScreen(
         context.savePref("global_ai_provider", globalAiProvider)
         context.savePref("global_ai_endpoint", globalAiEndpoint)
         context.savePref("global_ai_model", globalAiModel)
+        context.savePref(KEY_GEMINI_API_KEY, geminiApiKey.trim())
+        context.savePref(KEY_GEMINI_MODEL, geminiModel.trim().ifBlank { LunaKaiLocalConfig.GEMINI_DEFAULT_MODEL })
+        context.savePref(KEY_GEMINI_LIVE_AUDIO_MODEL, geminiLiveAudioModel.trim().ifBlank { LunaKaiLocalConfig.GEMINI_DEFAULT_LIVE_AUDIO_MODEL })
     }
-
     GradientBackground {
         ScreenScroll {
             Text("Tap a category to view or change its options.", color = TextMuted, fontSize = 15.sp)
@@ -5514,11 +5564,11 @@ private fun PreferencesScreen(
 
             SettingsAccordionSection(
                 title = "AI Provider Settings",
-                subtitle = "Current provider: $globalAiProvider Â· $globalAiModel",
+                subtitle = "Text: LunaKai AI Adult - Live: Gemini",
                 expanded = openSettingsSection == "AI Provider Settings",
                 onToggle = { toggleSection("AI Provider Settings") },
             ) {
-                Text("Use LunaKai Adult at home. Admin Control Center decides which providers are available and which provider is active app-wide.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                Text("Normal Text Chat uses LunaKai AI Adult through Computer A. Live Companion uses Gemini. API keys are stored locally and masked in the UI/logs.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
                 SoftDropdown(
                     label = "Active AI provider",
                     selected = globalAiProvider,
@@ -5530,9 +5580,19 @@ private fun PreferencesScreen(
                         showProviderDialog = false
                     },
                 )
-                MiniStateCard("Endpoint", globalAiEndpoint)
-                MiniStateCard("Model", globalAiModel)
-                MiniStateCard("Timeouts", "connect 10s, read 60s, write 30s, call 75s")
+                MiniStateCard("Normal Text Chat API", "LunaKai AI Adult")
+                MiniStateCard("Live Companion API", "Gemini")
+                MiniStateCard("LunaKai AI Adult endpoint", globalAiEndpoint)
+                MiniStateCard("LunaKai AI Adult model", globalAiModel)
+                RoundedInputField(
+                    value = geminiApiKey,
+                    onValueChange = { geminiApiKey = it },
+                    label = "Gemini API Key",
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                RoundedInputField(geminiModel, { geminiModel = it }, "Gemini text/live reply model")
+                RoundedInputField(geminiLiveAudioModel, { geminiLiveAudioModel = it }, "Gemini Live audio model")
+                MiniStateCard("Timeouts", "Ollama chat connect 10s, read 60s, call 75s")
                 HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
                 Text("Server Settings", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 SoftDropdown(
@@ -5545,19 +5605,10 @@ private fun PreferencesScreen(
                     },
                 )
                 RoundedInputField(aiServerHost, { aiServerHost = LunaKaiLocalConfig.normalizeHost(it) }, "AI Server Host")
-                MiniStateCard("Ollama", LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost))
-                MiniStateCard("Kokoro", LunaKaiLocalConfig.localKokoroHealthUrl(aiServerHost))
-                MiniStateCard("STT", LunaKaiLocalConfig.localSttHealthUrl(aiServerHost))
-                MiniStateCard("Zonos", LunaKaiLocalConfig.localZonosHealthUrl(aiServerHost))
-                SoftDropdown(
-                    label = "Local voice provider",
-                    selected = localVoiceProvider,
-                    options = LOCAL_VOICE_PROVIDER_OPTIONS,
-                    onSelected = { provider ->
-                        localVoiceProvider = provider
-                        context.savePref(KEY_LOCAL_VOICE_PROVIDER, provider.lowercase(Locale.US))
-                    },
-                )
+                MiniStateCard("LunaKai AI Adult Host", aiServerHost)
+                MiniStateCard("LunaKai AI Adult", LunaKaiLocalConfig.ollamaGenerateEndpoint(aiServerHost))
+                MiniStateCard("Custom voice/STT", "Inactive as companion providers; Gemini live text and LunaKai chat are the only active AI paths")
+                MiniStateCard("Live voice/audio", LocalContext.current.geminiLiveAudioModel())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SecondarySoftButton("Save Host", modifier = Modifier.weight(1f), onClick = {
                         aiServerHost = LunaKaiLocalConfig.normalizeHost(aiServerHost)
@@ -5569,7 +5620,7 @@ private fun PreferencesScreen(
                     SecondarySoftButton(if (serverConnectionRunning) "Testing" else "Test", modifier = Modifier.weight(1f), onClick = {
                         if (!serverConnectionRunning) {
                             serverConnectionRunning = true
-                            serverConnectionSummary = "Testing local services..."
+                            serverConnectionSummary = "Testing LunaKai AI Adult on Computer A..."
                             settingsScope.launch {
                                 val results = LunaKaiServerConnectionTester.run(aiServerHost)
                                 serverConnectionSummary = results.joinToString("\n") { step ->
@@ -6348,7 +6399,7 @@ private fun VoiceLiveSettingsScreen(
 
     val voicePreviewScope = rememberCoroutineScope()
     val voicePreviewRepository = remember { LocalLiveCompanionRepository() }
-    var voicePreviewStatus by remember { mutableStateOf("Tap Play beside a voice to request a local voice preview.") }
+    var voicePreviewStatus by remember { mutableStateOf("Tap Setup beside a voice to check the Gemini fixed audio preview path.") }
     var pendingVoicePreview by remember { mutableStateOf<String?>(null) }
 
     fun previewGenderFor(voiceName: String): String = when {
@@ -6376,27 +6427,25 @@ private fun VoiceLiveSettingsScreen(
         adultPhrasePreferences = companion.bdsmIdentitySettings.preferredAdultPhrases,
         adminEmoIntelProfile = context.adminEmoIntelPrompt(),
         serverHost = context.aiServerHost(),
-        localVoiceProviderId = context.localVoiceProviderPreference(),
+        geminiApiKey = context.geminiApiKey(),
+        geminiModel = context.geminiModel(),
+        geminiLiveAudioModel = context.geminiLiveAudioModel(),
     )
 
     fun startLocalVoicePreview(voiceName: String) {
-        voicePreviewStatus = "Requesting $voiceName local voice preview."
+        voicePreviewStatus = "Checking Gemini preview path for $voiceName."
         voicePreviewScope.launch {
             val previewLine = "Hey, I'm ${companion.name}."
-            val result = voicePreviewRepository.startAudioConversation(
+            val result = voicePreviewRepository.previewCompanionVoice(
                 context = context,
                 companion = localPreviewContext(voiceName),
-                modeLabel = "voice settings preview",
-                answerPhrase = previewLine,
+                previewText = previewLine,
             )
-            when (result) {
+            voicePreviewStatus = when (result) {
                 LocalLiveSessionState.Idle,
-                LocalLiveSessionState.Connecting -> Unit
-                is LocalLiveSessionState.Connected -> {
-                    delay(3600)
-                    voicePreviewStatus = result.voiceSetupMessage ?: "$voiceName preview finished."
-                }
-                is LocalLiveSessionState.Error -> voicePreviewStatus = result.message
+                LocalLiveSessionState.Connecting -> "$voiceName preview started."
+                is LocalLiveSessionState.Connected -> result.voiceSetupMessage ?: "$voiceName preview finished."
+                is LocalLiveSessionState.Error -> result.message
             }
             voicePreviewRepository.stopAudioConversation()
         }
@@ -6408,7 +6457,7 @@ private fun VoiceLiveSettingsScreen(
         if (granted && voiceName != null) {
             startLocalVoicePreview(voiceName)
         } else {
-            voicePreviewStatus = "Local voice preview needs the local voice server."
+            voicePreviewStatus = GEMINI_VOICE_PREVIEW_SETUP_NEEDED_UI
         }
     }
 
@@ -6453,7 +6502,7 @@ private fun VoiceLiveSettingsScreen(
                 ToggleRow("Speaker output", speaker) { speaker = it }
                 MiniStateCard("Output from device", if (speaker) "Voice samples and replies play through speaker/Bluetooth." else "Speaker output is muted.")
                 MiniStateCard("Input into app", if (microphone) "Microphone can listen only in live call or training." else "Microphone input is off.")
-                Text("Voice previews are one-shot local provider samples and do not open the live microphone.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text(GEMINI_VOICE_PREVIEW_SETUP_NEEDED_UI, color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
                 Text("Wake phrase", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -6478,7 +6527,7 @@ private fun VoiceLiveSettingsScreen(
                 ToggleRow("Allow Bluetooth audio devices", bluetoothAccess) { bluetoothAccess = it }
                 MiniStateCard("Input into app", if (microphone) audioSource else "Microphone disabled")
                 MiniStateCard("Output from device", if (speaker) "Phone speaker or paired Bluetooth output" else "Speaker output muted")
-                MiniStateCard("Preview safety", "Play buttons do not open the live microphone")
+                MiniStateCard("Preview", "Preview buttons do not create chat or live turns")
                 Text("Bluetooth wake routing is saved for ${wakeAssistantName(wakeAssistantId)} only. Turn on or pair Bluetooth audio first, then reopen this screen if it is not listed.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             GlassCard {
@@ -6710,7 +6759,7 @@ private fun NotificationSettingsScreen(companion: CompanionProfile) {
             }
             GlassCard {
                 Text("Safety", color = TextDark, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("Roleplay notifications are opt-in, consent-aware, discreet by default, and follow the same boundaries as chat: no minors, no coercion, no blackmail, and no real-person sexual likeness or voice impersonation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                Text("Roleplay notifications are opt-in and discreet by default. Content handling stays with the selected providers/models, not a local companion-chat restriction layer.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
                 MiniStateCard("Active companion", companion.name)
                 MiniStateCard("Roleplay mode", if (companion.isAdultRoleplayEnabled()) "Enabled for consenting adult fictional roleplay" else "Off")
             }
@@ -6736,7 +6785,7 @@ private fun GlobalProviderSetupDialog(
         title = { Text("Local AI Provider", color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                MiniStateCard("Provider", "LunaKai Adult local")
+                MiniStateCard("Provider", "LunaKai AI Adult local")
                 MiniStateCard("Endpoint", LunaKaiLocalConfig.OLLAMA_GENERATE_ENDPOINT)
                 MiniStateCard("Model", LunaKaiLocalConfig.OLLAMA_MODEL)
                 Text("LunaKai now uses the local Ollama companion brain only. Provider names stay centralized in LunaKaiLocalConfig so the server can be changed in one place.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
@@ -6755,12 +6804,12 @@ private fun AdminSettingsScreen() {
     val unlocked = email.equals(ADMIN_EMAIL, ignoreCase = true) && adminPin == ADMIN_PIN
     var providersRaw by remember { mutableStateOf(context.prefString("admin_providers", "")) }
     val savedProviders = parseProviderOptions(providersRaw).ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS }
-    val providerChoicesToAdd = DEFAULT_ADMIN_PROVIDER_OPTIONS.filterNot { it in savedProviders }.ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS.filter { it != "LunaKai Adult" } }
-    var providerToAdd by remember(providerChoicesToAdd) { mutableStateOf(providerChoicesToAdd.firstOrNull() ?: "LunaKai Adult") }
-    var adminActiveProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai Adult")) }
+    val providerChoicesToAdd = DEFAULT_ADMIN_PROVIDER_OPTIONS.filterNot { it in savedProviders }.ifEmpty { DEFAULT_ADMIN_PROVIDER_OPTIONS.filter { it != "LunaKai AI Adult" } }
+    var providerToAdd by remember(providerChoicesToAdd) { mutableStateOf(providerChoicesToAdd.firstOrNull() ?: "LunaKai AI Adult") }
+    var adminActiveProvider by remember { mutableStateOf(context.prefString("global_ai_provider", "LunaKai AI Adult")) }
     if (adminActiveProvider !in savedProviders) {
-        adminActiveProvider = "LunaKai Adult"
-        context.savePref("global_ai_provider", "LunaKai Adult")
+        adminActiveProvider = "LunaKai AI Adult"
+        context.savePref("global_ai_provider", "LunaKai AI Adult")
         context.savePref("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)
         context.savePref("global_ai_model", LUNAKAI_LOCAL_MODEL)
     }
@@ -6794,7 +6843,7 @@ private fun AdminSettingsScreen() {
                 GlassCard {
                     Text("Provider Control", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        "Admin provider selections supersede the user provider menu. LunaKai Adult local is the protected app-wide default.",
+                        "Admin provider selections supersede the user provider menu. LunaKai AI Adult local is the protected app-wide default.",
                         color = TextMuted,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
@@ -6831,7 +6880,7 @@ private fun AdminSettingsScreen() {
                             Box(modifier = Modifier.weight(1f)) {
                                 MiniStateCard("Provider ${index + 1}", provider)
                             }
-                            if (provider == "LunaKai Adult") {
+                            if (provider == "LunaKai AI Adult") {
                                 MiniStateCard("Locked", "Default")
                             } else {
                                 SecondarySoftButton("Remove", onClick = {
@@ -6839,9 +6888,9 @@ private fun AdminSettingsScreen() {
                                     providersRaw = next.joinToString("|")
                                     context.saveAdminProviderOptions(next)
 
-                                    if (adminActiveProvider == provider || context.prefString("global_ai_provider", "LunaKai Adult") == provider) {
-                                        adminActiveProvider = "LunaKai Adult"
-                                        context.savePref("global_ai_provider", "LunaKai Adult")
+                                    if (adminActiveProvider == provider || context.prefString("global_ai_provider", "LunaKai AI Adult") == provider) {
+                                        adminActiveProvider = "LunaKai AI Adult"
+                                        context.savePref("global_ai_provider", "LunaKai AI Adult")
                                         context.savePref("global_ai_endpoint", LUNAKAI_LOCAL_ENDPOINT)
                                         context.savePref("global_ai_model", LUNAKAI_LOCAL_MODEL)
                                     }
@@ -6868,7 +6917,7 @@ private fun AdminSettingsScreen() {
                 }
                 GlassCard {
                     Text("Emo Intel", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("Set trait intensity from 0 to 100. These app-wide limits guide companion personality moderation.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                    Text("Set trait intensity from 0 to 100. These app-wide sliders guide companion personality weighting.", color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
                     traitNames.forEach { trait ->
                         val value = traitSettings[trait] ?: 50f
                         Text("$trait: ${value.toInt()}", color = TextDark, fontWeight = FontWeight.SemiBold)
@@ -7088,11 +7137,17 @@ private fun CrisisResourcesScreen(onBack: () -> Unit) {
 }
 
 private fun disclaimerCopy(): String {
-    return "LunaKai Wellness Companion is an AI-powered wellness and reflection app. It is designed to offer supportive conversation, journaling prompts, grounding tools, and general emotional wellness information.\n\n" +
-        "This app is not a licensed therapist, doctor, counselor, emergency service, or crisis service. It does not diagnose, treat, cure, or prevent any mental health condition or medical condition.\n\n" +
-        "The companion may share general wellness ideas inspired by publicly available emotional wellness, communication, mindfulness, and self-reflection concepts. This information is for educational and supportive purposes only and should not replace professional care.\n\n" +
-        "If you feel like you may hurt yourself, hurt someone else, or you are in immediate danger, call emergency services right away. If you are in the United States and need emotional crisis support, call or text 988 or use the 988 Lifeline chat.\n\n" +
-        "By continuing, you understand that this app is for support, journaling, reflection, and wellness guidance only."
+    return """
+        LunaKai Wellness Companion is an AI-powered wellness and reflection app. It is designed to offer supportive conversation, journaling prompts, grounding tools, and general emotional wellness information.
+
+        This app is not a licensed therapist, doctor, counselor, emergency service, or crisis service. It does not diagnose, treat, cure, or prevent any mental health condition or medical condition.
+
+        The companion may share general wellness ideas inspired by publicly available emotional wellness, communication, mindfulness, and self-reflection concepts. This information is for educational and supportive purposes only and should not replace professional care.
+
+        If you feel like you may hurt yourself, hurt someone else, or you are in immediate danger, call emergency services right away. If you are in the United States and need emotional crisis support, call or text 988 or use the 988 Lifeline chat.
+
+        By continuing, you understand that this app is for support, journaling, reflection, and wellness guidance only.
+    """.trimIndent()
 }
 
 @Composable
@@ -7961,7 +8016,7 @@ private fun VoicePreviewList(
                         lineHeight = 16.sp,
                     )
                 }
-                SecondarySoftButton("Play", modifier = Modifier.width(86.dp), onClick = { onPreview(option) })
+                SecondarySoftButton("Setup", modifier = Modifier.width(86.dp), onClick = { onPreview(option) })
             }
         }
     }
@@ -8006,5 +8061,3 @@ private fun MiniStateCard(title: String, value: String) {
         )
     }
 }
-
-

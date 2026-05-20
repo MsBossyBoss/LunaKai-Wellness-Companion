@@ -266,6 +266,22 @@ class ChatViewModel(
         }
     }
 
+    fun addUserTranscript(
+        companion: CompanionProfile,
+        userText: String,
+        mode: String = ChatMessage.MODE_CALL,
+    ) {
+        val trimmed = userText.trim()
+        if (trimmed.isBlank()) return
+
+        val chatId = stableChatIdForCompanion(companion.id)
+        val userMessage = newMessage(chatId, companion.id, ChatMessage.SENDER_USER, trimmed, mode)
+        appendOptimistic(userMessage)
+
+        viewModelScope.launch {
+            saveMessage(userMessage, companion.name)
+        }
+    }
     fun addCompanionTranscript(
         companion: CompanionProfile,
         companionText: String,

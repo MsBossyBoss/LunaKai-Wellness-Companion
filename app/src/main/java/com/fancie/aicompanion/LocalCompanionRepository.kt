@@ -22,7 +22,9 @@ data class CompanionContext(
     val adultProviderModel: String = LunaKaiLocalConfig.OLLAMA_MODEL,
     val adminEmoIntelProfile: String = "",
     val serverHost: String = LunaKaiLocalConfig.DEFAULT_SERVER_HOST,
-    val localVoiceProviderId: String = LunaKaiLocalConfig.DEFAULT_LOCAL_VOICE_PROVIDER,
+    val geminiApiKey: String = "",
+    val geminiModel: String = LunaKaiLocalConfig.GEMINI_DEFAULT_MODEL,
+    val geminiLiveAudioModel: String = LunaKaiLocalConfig.GEMINI_DEFAULT_LIVE_AUDIO_MODEL,
 )
 
 sealed interface CompanionBrainState {

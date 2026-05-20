@@ -3337,10 +3337,10 @@ private fun LiveCompanionCallScreen(
                     }
                 }
 
-                val liveInstruction = if (state.callStatus == "Ready to connect") {
-                    GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI
-                } else {
-                    state.currentCaption
+                val liveInstruction = when {
+                    state.callStatus == "Ready to connect" && !geminiKeyConfigured -> GEMINI_LIVE_AUDIO_SETUP_NEEDED_UI
+                    state.callStatus == "Ready to connect" -> "Gemini Live Voice is configured. Tap Call or Mic to start a live voice session."
+                    else -> state.currentCaption
                 }
                 Text(liveInstruction, color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
 

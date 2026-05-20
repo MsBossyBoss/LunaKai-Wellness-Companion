@@ -9,8 +9,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.AudioTranscriptionConfig
 import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.InlineDataPart
 import com.google.firebase.ai.type.LiveServerContent
@@ -18,8 +18,6 @@ import com.google.firebase.ai.type.LiveServerGoAway
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.PublicPreviewAPI
 import com.google.firebase.ai.type.ResponseModality
-import com.google.firebase.ai.type.SpeechConfig
-import com.google.firebase.ai.type.Voice
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.liveAudioConversationConfig
 import com.google.firebase.ai.type.liveGenerationConfig
@@ -28,6 +26,28 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+import java.net.URLEncoder
+import org.json.JSONObject
+import org.json.JSONArray
+import okio.ByteString
+import okhttp3.WebSocketListener
+import okhttp3.WebSocket
+import okhttp3.Response
+import okhttp3.Request
+import okhttp3.OkHttpClient
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import android.util.Base64
+import android.media.MediaRecorder
+import android.media.AudioRecord
 
 sealed interface LocalLiveSessionState {
     data object Idle : LocalLiveSessionState
@@ -84,7 +104,7 @@ class LocalLiveCompanionRepository(
 ) {
     companion object {
         private var connected = false
-        private var sharedSession: LiveSession? = null
+        private var sharedSession: GeminiLiveWebSocketSession? = null
         private var sharedModelName: String = ""
 
         suspend fun stopSharedAudioConversation() {
@@ -121,11 +141,18 @@ class LocalLiveCompanionRepository(
         runCatching {
             onPhase(LiveCallPhase.Calling, "Connecting Gemini Live Voice...")
             stopSharedAudioConversation()
-            val session = buildLiveModel(companion, modeLabel, answerPhrase).connect()
+            val session = GeminiLiveWebSocketSession(
+                context = context.applicationContext,
+                companion = companion,
+                modeLabel = modeLabel,
+                answerPhrase = answerPhrase,
+                onPhase = onPhase,
+            )
+            session.connect()
             sharedSession = session
             sharedModelName = modelName
             connected = true
-            startAudioOnSession(session, context, companion, onPhase)
+            session.startAudioConversation()
             Log.i(
                 "LunaKaiGeminiLive",
                 "liveSessionConnected liveApi=Gemini liveAudioModel=${modelName.safeLiveLog()} responseModality=audio geminiKeyConfigured=true firebaseAiConfigured=true normalChatProviderUsed=false lunaKaiAiAdultUsed=false androidTtsUsed=false androidSpeechUsed=false package=${context.packageName}",
@@ -167,33 +194,20 @@ class LocalLiveCompanionRepository(
             return@withContext LocalLiveSessionState.Error(setupMessage)
         }
 
-        var previewSession: LiveSession? = null
+        var previewSession: GeminiLiveWebSocketSession? = null
         runCatching {
             onPhase(LiveCallPhase.Calling, "Starting Gemini fixed voice preview...")
-            previewSession = buildLiveModel(companion, "fixed voice preview", null).connect()
+            previewSession = GeminiLiveWebSocketSession(
+                context = context.applicationContext,
+                companion = companion,
+                modeLabel = "fixed voice preview",
+                answerPhrase = null,
+                onPhase = onPhase,
+            )
             val session = previewSession ?: throw IOException("Gemini Live preview session was not created.")
-            session.send("Speak this exact fixed sample once, with no added words: $fixedPreviewText")
-            var playedAudio = false
-            try {
-                withTimeout(20_000L) {
-                    session.receive().collect { message ->
-                        if (message is LiveServerContent) {
-                            val audioParts = message.content?.parts?.filterIsInstance<InlineDataPart>().orEmpty()
-                            if (audioParts.isNotEmpty()) {
-                                onPhase(LiveCallPhase.Speaking, "Playing Gemini fixed voice preview.")
-                            }
-                            audioParts.forEach { part ->
-                                playPcm16Mono24khz(part.inlineData)
-                                playedAudio = true
-                            }
-                            if (message.turnComplete) throw PreviewTurnComplete()
-                        }
-                    }
-                }
-            } catch (_: PreviewTurnComplete) {
-                // Expected path once Gemini finishes the fixed preview turn.
-            }
-            if (!playedAudio) throw IOException("Gemini Live returned no audio for the fixed preview sample.")
+            session.connect()
+            session.sendTextTurn("Speak this exact fixed sample once, with no added words: $fixedPreviewText")
+            session.awaitFirstAudio(20_000L)
             Log.i(
                 "LunaKaiVoicePreview",
                 "previewSuccess liveApi=Gemini liveAudioModel=${modelName.safeLiveLog()} previewText=fixedSample chatMessageCreated=false liveTurnCreated=false companionSelfReply=false lunaKaiAiAdultUsed=false androidTtsUsed=false androidSpeechUsed=false",
@@ -238,7 +252,7 @@ class LocalLiveCompanionRepository(
         val existingSession = sharedSession
         if (connected && existingSession != null) {
             if (!existingSession.isAudioConversationActive()) {
-                startAudioOnSession(existingSession, context, companion, onPhase)
+                existingSession.startAudioConversation()
             }
             onPhase(LiveCallPhase.Listening, "Listening")
             return@withContext LocalLiveTurnResult(voiceMessage = "Gemini Live Voice is listening. Speak naturally; ${companion.companionName} will answer with audio.")
@@ -291,16 +305,14 @@ class LocalLiveCompanionRepository(
     fun isConnected(): Boolean = connected && sharedSession != null
 
     private fun buildLiveModel(
+        context: Context,
         companion: CompanionContext,
         modeLabel: String,
         answerPhrase: String?,
-    ) = Firebase.ai(backend = GenerativeBackend.googleAI()).liveModel(
+    ) = Firebase.ai(app = context.geminiFirebaseApp(companion), backend = GenerativeBackend.googleAI()).liveModel(
         modelName = companion.geminiLiveAudioModel.liveAudioModelOrDefault(),
         generationConfig = liveGenerationConfig {
             responseModality = ResponseModality.AUDIO
-            speechConfig = SpeechConfig(voice = Voice(companion.geminiLiveVoiceName()))
-            inputAudioTranscription = AudioTranscriptionConfig()
-            outputAudioTranscription = AudioTranscriptionConfig()
         },
         systemInstruction = content {
             text(companion.liveVoiceSystemInstruction(modeLabel, answerPhrase))
@@ -335,11 +347,175 @@ class LocalLiveCompanionRepository(
         )
         Log.i(
             "LunaKaiGeminiLive",
-            "liveAudioConversationStarted liveApi=Gemini liveAudioModel=${companion.geminiLiveAudioModel.liveAudioModelOrDefault().safeLiveLog()} voice=${companion.geminiLiveVoiceName().safeLiveLog()} androidAudioRecordUsedByFirebaseLive=true androidTtsUsed=false androidSpeechUsed=false package=${context.packageName}",
+            "liveAudioConversationStarted liveApi=Gemini liveAudioModel=${companion.geminiLiveAudioModel.liveAudioModelOrDefault().safeLiveLog()} voice=default androidAudioRecordUsedByFirebaseLive=true androidTtsUsed=false androidSpeechUsed=false package=${context.packageName}",
         )
     }
 }
 
+private class GeminiLiveWebSocketSession(
+    private val context: Context,
+    private val companion: CompanionContext,
+    private val modeLabel: String,
+    private val answerPhrase: String?,
+    private val onPhase: (LiveCallPhase, String) -> Unit,
+) {
+    private val client = OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val setupComplete = CompletableDeferred<Unit>()
+    private val firstAudio = CompletableDeferred<Unit>()
+    @Volatile private var active = false
+    private var webSocket: WebSocket? = null
+    private var recorder: AudioRecord? = null
+    private var recordingJob: Job? = null
+
+    suspend fun connect() {
+        val apiKey = companion.geminiApiKey.trim()
+        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${URLEncoder.encode(apiKey, "UTF-8")}"
+        val request = Request.Builder().url(url).build()
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                webSocket.send(setupPayload().toString())
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                handleServerMessage(text)
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                handleServerMessage(bytes.utf8())
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                active = false
+                webSocket.close(code, reason)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                active = false
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                active = false
+                if (!setupComplete.isCompleted) setupComplete.completeExceptionally(t)
+                if (!firstAudio.isCompleted) firstAudio.completeExceptionally(t)
+                onPhase(LiveCallPhase.Error, "Gemini Live Voice setup needed. Live chat is available. Live voice audio is not configured yet. ${t.liveErrorDetail()}")
+            }
+        })
+        withTimeout(15_000L) { setupComplete.await() }
+        active = true
+    }
+
+    @SuppressLint("MissingPermission")
+    fun startAudioConversation() {
+        if (recordingJob?.isActive == true) return
+        recordingJob = scope.launch {
+            val bufferSize = AudioRecord.getMinBufferSize(
+                16_000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+            ).coerceAtLeast(3_200)
+            val audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                16_000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize * 2,
+            )
+            recorder = audioRecord
+            audioRecord.startRecording()
+            onPhase(LiveCallPhase.Listening, "Listening")
+            val buffer = ByteArray(3_200)
+            while (active && isActive) {
+                val read = audioRecord.read(buffer, 0, buffer.size)
+                if (read > 0) sendAudioChunk(buffer.copyOf(read))
+                delay(20L)
+            }
+        }
+    }
+
+    fun isAudioConversationActive(): Boolean = active && recordingJob?.isActive == true
+
+    fun sendTextTurn(text: String) {
+        val turn = JSONObject()
+            .put("role", "user")
+            .put("parts", JSONArray().put(JSONObject().put("text", text)))
+        val payload = JSONObject()
+            .put("clientContent", JSONObject()
+                .put("turns", JSONArray().put(turn))
+                .put("turnComplete", true))
+        webSocket?.send(payload.toString())
+    }
+
+    suspend fun awaitFirstAudio(timeoutMillis: Long) {
+        withTimeout(timeoutMillis) { firstAudio.await() }
+    }
+
+    fun stopAudioConversation() = close()
+    fun stopAudioPlayback() = close()
+
+    fun close() {
+        active = false
+        recordingJob?.cancel()
+        runCatching { recorder?.stop() }
+        runCatching { recorder?.release() }
+        recorder = null
+        runCatching { webSocket?.close(1000, "done") }
+        webSocket = null
+        scope.cancel()
+        client.dispatcher.executorService.shutdown()
+    }
+
+    private fun setupPayload(): JSONObject {
+        val model = companion.geminiLiveAudioModel.liveAudioModelOrDefault().let { if (it.startsWith("models/")) it else "models/$it" }
+        return JSONObject()
+            .put("setup", JSONObject()
+                .put("model", model)
+                .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("AUDIO"))))
+    }
+
+    private fun sendAudioChunk(bytes: ByteArray) {
+        val audio = JSONObject()
+            .put("mimeType", "audio/pcm;rate=16000")
+            .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        val payload = JSONObject().put("realtimeInput", JSONObject().put("audio", audio))
+        webSocket?.send(payload.toString())
+    }
+
+    private fun handleServerMessage(text: String) {
+        runCatching {
+            val root = JSONObject(text)
+            if (root.has("setupComplete")) {
+                setupComplete.complete(Unit)
+                onPhase(LiveCallPhase.Listening, "Gemini Live Voice connected.")
+                return
+            }
+            val serverContent = root.optJSONObject("serverContent") ?: return
+            val outputText = serverContent.optJSONObject("outputTranscription")?.optString("text").orEmpty().trim()
+            if (outputText.isNotBlank()) onPhase(LiveCallPhase.Speaking, outputText.take(160))
+            val parts = serverContent.optJSONObject("modelTurn")?.optJSONArray("parts")
+            var audioPlayed = false
+            if (parts != null) {
+                for (index in 0 until parts.length()) {
+                    val inlineData = parts.optJSONObject(index)?.optJSONObject("inlineData") ?: continue
+                    val data = inlineData.optString("data")
+                    if (data.isNotBlank()) {
+                        val audioBytes = Base64.decode(data, Base64.DEFAULT)
+                        playPcm16Mono24khz(audioBytes)
+                        audioPlayed = true
+                    }
+                }
+            }
+            if (audioPlayed && !firstAudio.isCompleted) firstAudio.complete(Unit)
+            if (serverContent.optBoolean("turnComplete", false) && active) onPhase(LiveCallPhase.Listening, "Listening")
+        }.onFailure { error ->
+            Log.w("LunaKaiGeminiLive", "liveWebSocketMessageParseFailed exception=${error::class.java.simpleName} message=${error.message?.safeLiveLog()} androidTtsUsed=false androidSpeechUsed=false")
+        }
+    }
+}
 private const val GEMINI_LIVE_SETUP_BASE =
     "Gemini Live Voice setup needed. Live chat is available. Live voice audio is not configured yet."
 
@@ -355,8 +531,29 @@ private fun CompanionContext.geminiLiveSetupMessage(context: Context): String? {
 
 private fun Context.firebaseAiConfigured(): Boolean = runCatching {
     val options = FirebaseApp.getInstance().options
-    options.apiKey.isNotBlank() && options.projectId?.isNotBlank() == true && options.applicationId.isNotBlank()
+    options.projectId?.isNotBlank() == true && options.applicationId.isNotBlank()
 }.getOrDefault(false)
+
+private val geminiFirebaseAppLock = Any()
+
+private fun Context.geminiFirebaseApp(companion: CompanionContext): FirebaseApp {
+    val apiKey = companion.geminiApiKey.trim()
+    val defaultApp = FirebaseApp.getInstance()
+    val defaultOptions = defaultApp.options
+    val appName = "lunakaiGeminiLive${apiKey.firebaseAppNameHash()}"
+    synchronized(geminiFirebaseAppLock) {
+        FirebaseApp.getApps(applicationContext).firstOrNull { it.name == appName }?.let { return it }
+        val builder = FirebaseOptions.Builder()
+            .setApplicationId(defaultOptions.applicationId)
+            .setApiKey(apiKey)
+        defaultOptions.projectId?.takeIf { it.isNotBlank() }?.let(builder::setProjectId)
+        defaultOptions.gcmSenderId?.takeIf { it.isNotBlank() }?.let(builder::setGcmSenderId)
+        defaultOptions.storageBucket?.takeIf { it.isNotBlank() }?.let(builder::setStorageBucket)
+        defaultOptions.databaseUrl?.takeIf { it.isNotBlank() }?.let(builder::setDatabaseUrl)
+        return FirebaseApp.initializeApp(applicationContext, builder.build(), appName)
+            ?: FirebaseApp.getInstance(appName)
+    }
+}
 
 private fun CompanionContext.liveVoiceSystemInstruction(modeLabel: String, answerPhrase: String?): String {
     val adultMode = bdsmEnabled && bdsmAdultConsentConfirmed
@@ -397,6 +594,10 @@ private fun Throwable.liveErrorDetail(): String = when (this) {
 }
 
 private fun String.safeLiveLog(): String = replace(Regex("[\\r\\n]+"), " ").take(180)
+private fun String.firebaseAppNameHash(): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray(Charsets.UTF_8))
+    return digest.take(8).joinToString("") { "%02x".format(it) }
+}
 
 private class PreviewTurnComplete : RuntimeException()
 
